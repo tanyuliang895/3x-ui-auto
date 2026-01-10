@@ -9,6 +9,4 @@
 - 最新版（2026年活跃维护，功能最全、安全最高）
 - 支持 Ubuntu/Debian/CentOS 等主流系统
 
-### 一键安装命令
-```bash
-bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/3x-ui-auto/main/install.sh)
+
