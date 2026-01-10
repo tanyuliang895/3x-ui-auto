@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互、无证书、固定端口 2026 + BBR 加速）
-# 成功跳过 SSL 版 - 2026-01-10，菜单时故意无效输入跳过
+# 修复版 - 强制跳过 SSL 菜单，使用纯 HTTP
 
 PORT="2026"
 USERNAME="liang"
@@ -34,21 +34,21 @@ TEMP_SCRIPT="/tmp/3x-ui.sh"
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 chmod +x "$TEMP_SCRIPT"
 
-# expect：端口正常，SSL 菜单故意无效输入 "n" 跳过
+# expect 自动化 - 故意在 SSL 菜单发送无效 "n" 跳过
 expect <<END_EXPECT
     set timeout -1
     spawn $TEMP_SCRIPT
 
-    # 1. 端口 y
+    # 端口自定义
     expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
 
-    # 2. 输入端口
+    # 输入端口
     expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
 
-    # 3. SSL 菜单 → 故意发送 "n"（无效），让它输出 "Invalid option. Skipping SSL setup." 并继续
+    # SSL 菜单 - 发送无效输入 "n" 强制跳过证书申请
     expect -re "(?i)Choose an option" { send "n\\r" }
 
-    # 后续所有提示回车或 n
+    # 后续提示全部回车或 n
     expect -re "(?i)(IPv6|domain|域名|enter)" { send "\\r" }
     expect -re "\\[y/n\\]" { send "n\\r" }
     expect -re ".*" { send "\\r" }
@@ -58,7 +58,7 @@ END_EXPECT
 
 rm -f "$TEMP_SCRIPT" >/dev/null 2>&1
 
-# 强制关闭 HTTPS（双保险）
+# 强制关闭 HTTPS
 echo "强制关闭 HTTPS..."
 /usr/local/x-ui/x-ui setting -https false >/dev/null 2>&1 || true
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
