@@ -1,6 +1,6 @@
 #!/bin/bash
-# 3X-UI 一键全自动安装脚本（零交互、无证书、固定端口 2026 + BBR）
-# 最终破坏版 - 强制跳过 SSL 菜单，使用纯 HTTP
+# 3X-UI 一键全自动安装脚本（零交互、无证书、固定端口 2026 + BBR 加速）
+# 成功跳过 SSL 版 - 2026-01-10，菜单时故意无效输入跳过
 
 PORT="2026"
 USERNAME="liang"
@@ -20,6 +20,7 @@ if ! sysctl net.ipv4.tcp_congestion_control | grep -q "bbr"; then
     sysctl -p >/dev/null 2>&1 || true
 fi
 modprobe tcp_bbr 2>/dev/null || true
+echo "拥塞控制: $(sysctl -n net.ipv4.tcp_congestion_control)"
 echo -e "\033[32mBBR 已开启！\033[0m\n"
 
 # 依赖
@@ -33,22 +34,22 @@ TEMP_SCRIPT="/tmp/3x-ui.sh"
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 chmod +x "$TEMP_SCRIPT"
 
-# expect：端口正常，SSL 菜单强制发送无效输入跳过
+# expect：端口正常，SSL 菜单故意无效输入 "n" 跳过
 expect <<END_EXPECT
     set timeout -1
     spawn $TEMP_SCRIPT
 
-    # 端口 y
+    # 1. 端口 y
     expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
 
-    # 输入端口
+    # 2. 输入端口
     expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
 
-    # SSL 菜单出现 → 发送无效字符（如 "n"），让它报错跳过申请
-    expect -re "(?i)Choose an option" { send "n\\r" }  # 故意 n 或无效，强制跳过
+    # 3. SSL 菜单 → 故意发送 "n"（无效），让它输出 "Invalid option. Skipping SSL setup." 并继续
+    expect -re "(?i)Choose an option" { send "n\\r" }
 
     # 后续所有提示回车或 n
-    expect -re "(?i)(IPv6|domain|域名)" { send "\\r" }
+    expect -re "(?i)(IPv6|domain|域名|enter)" { send "\\r" }
     expect -re "\\[y/n\\]" { send "n\\r" }
     expect -re ".*" { send "\\r" }
 
@@ -57,7 +58,7 @@ END_EXPECT
 
 rm -f "$TEMP_SCRIPT" >/dev/null 2>&1
 
-# 强制关闭 HTTPS
+# 强制关闭 HTTPS（双保险）
 echo "强制关闭 HTTPS..."
 /usr/local/x-ui/x-ui setting -https false >/dev/null 2>&1 || true
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
