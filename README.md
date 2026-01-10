@@ -1,2 +1,14 @@
-# 3x-ui-auto
-3X-UI 一键全自动安装脚本（零交互，默认用户名 liang / 密码 liang / 端口 2024），自动迁移旧 X-UI 数据 + IP SSL 证书
+# 3X-UI 一键全自动安装脚本
+
+主流官方版 3X-UI（MHSanaei/3x-ui）的一键安装包装，支持**零交互全自动**安装。
+
+### 优势
+- 自动迁移旧 X-UI 数据（用户、配置、流量全保留）
+- 默认用户名 `liang` / 密码 `liang` / 端口 `2024`
+- 自动申请 IP SSL 证书（Let's Encrypt，短效但自动续期）
+- 最新版（2026年活跃维护，功能最全、安全最高）
+- 支持 Ubuntu/Debian/CentOS 等主流系统
+
+### 一键安装命令
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/3x-ui-auto/main/install.sh)
