@@ -1,70 +1,87 @@
 #!/bin/bash
 # 3X-UI 一键安装脚本（用户名: liang, 密码: liang, 端口: 2026）
-# 脚本作者：宇亮 @tanyuliang895@gmail.com
-# 用法：bash <(curl -Ls <你的脚本地址>)
+# 用法：
+# bash <(curl -Ls https://raw.githubusercontent.com/你的仓库/3x-ui-auto/main/install.sh)
 
-# 配置参数（根据你的需求硬编码）
-USERNAME="liang"   # 用户名
-PASSWORD="liang"   # 密码
-PORT="2026"        # 面板端口
+set -e
 
-# 自动安装逻辑
-set -e  # 任何错误立即终止
-echo "🔧 正在安装 3X-UI (用户名: $USERNAME, 端口: $PORT)..."
+# ====== 固定参数 ======
+USERNAME="liang"
+PASSWORD="liang"
+PORT="2026"
 
-# 依赖检查（自动安装 curl 和 socat）
-if ! command -v curl &> /dev/null; then
-  echo "安装依赖: curl socat..."
-  if [ -x "$(command -v apt-get)" ]; then
-    sudo apt-get update && sudo apt-get install -y curl socat ufw
-  elif [ -x "$(command -v yum)" ]; then
-    sudo yum install -y curl socat firewalld
+echo "======================================="
+echo "  正在安装 3X-UI"
+echo "  用户名: $USERNAME"
+echo "  端口:   $PORT"
+echo "======================================="
+
+# ====== 必须是 root ======
+if [ "$EUID" -ne 0 ]; then
+  echo "❌ 请使用 root 用户运行该脚本"
+  exit 1
+fi
+
+# ====== 安装 curl ======
+if ! command -v curl >/dev/null 2>&1; then
+  echo "安装 curl..."
+  if command -v apt-get >/dev/null 2>&1; then
+    apt-get update && apt-get install -y curl
+  elif command -v yum >/dev/null 2>&1; then
+    yum install -y curl
   else
-    echo "❌ 错误：不支持的系统！请手动安装 curl 和 socat 后重试。"
+    echo "❌ 不支持的系统，请手动安装 curl"
     exit 1
   fi
 fi
 
-# 执行安装命令
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
-y
+# ====== 安装 3X-UI ======
+echo "开始安装 3X-UI..."
+bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
+
+# ====== 等待服务生成 ======
+sleep 2
+
+# ====== 配置 3X-UI 面板 ======
+echo "配置面板账号与端口..."
+
+x-ui setting <<EOF
+$PORT
 $USERNAME
 $PASSWORD
-$PORT
 EOF
 
-# 配置面板监听所有网卡 (0.0.0.0)
-CONFIG_FILE="/etc/x-ui/config.yaml"
-if [ -f "$CONFIG_FILE" ]; then
-  echo "配置面板监听地址为 0.0.0.0..."
-  sed -i 's/^address: .*/address: 0.0.0.0/' "$CONFIG_FILE"
-  x-ui restart
-fi
+x-ui restart
 
-# 启用 BBR
-echo "启用 BBR TCP 加速..."
-cat >/etc/sysctl.d/99-bbr.conf <<EOF
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-EOF
-sysctl --system
+# ====== 开启 BBR 加速 ======
+echo "检测并开启 BBR..."
 
-# 防火墙开放端口
-echo "开放防火墙端口 $PORT..."
-if command -v ufw &> /dev/null; then
-  ufw allow $PORT/tcp
-  ufw reload
-elif command -v firewall-cmd &> /dev/null; then
-  firewall-cmd --permanent --add-port=$PORT/tcp
-  firewall-cmd --reload
-fi
+enable_bbr() {
+  if sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
+    echo "BBR 已开启，跳过"
+    return
+  fi
 
-# 输出访问信息
-IP=$(curl -4s icanhazip.com)
-echo -e "\n\033[32m✅ 安装完成！\033[0m"
+  echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+  echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+
+  sysctl -p >/dev/null 2>&1
+
+  if sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
+    echo "✅ BBR 启用成功"
+  else
+    echo "⚠️ BBR 启用失败（可能是内核不支持）"
+  fi
+}
+
+enable_bbr
+
+# ====== 输出访问信息 ======
+IP=$(curl -4s icanhazip.com || echo "你的服务器IP")
+
+echo "======================================="
+echo "✅ 安装完成"
 echo "访问地址: http://$IP:$PORT"
-echo "用户名: $USERNAME"
-echo "密码: $PASSWORD"
-echo "BBR TCP 加速已启用"
-echo "面板已绑定 0.0.0.0，防火墙端口已开放"
-echo "脚本作者：宇亮 @tanyuliang895@gmail.com"
+echo "用户名:   $USERNAME"
+echo "密码:     $PASSWORD"
+echo "======================================="
