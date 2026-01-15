@@ -1,5 +1,5 @@
 #!/bin/bash
-# 3X-UI 一键安装脚本（用户名: liang, 密码: liang, 端口: 2024） + BBR加速 + 随机面板路径
+# 3X-UI 一键安装脚本（用户名: liang, 密码: liang, 端口: 2024） + BBR加速（无随机面板路径）
 # 用法：bash <(curl -Ls https://raw.githubusercontent.com/你的仓库/main/install.sh)
 
 set -e
@@ -14,9 +14,9 @@ fi
 USERNAME="liang"
 PASSWORD="liang"
 PORT="2024"
-BASEPATH=$(tr -dc a-z0-9 </dev/urandom | head -c 8)  # 随机8位面板路径，如 /a1b2c3d4
+BASEPATH=""  # 为空表示无随机路径，直接访问 http://IP:端口/
 
-echo "开始安装 3X-UI（用户名: $USERNAME，端口: $PORT，面板路径: /$BASEPATH） + BBR加速"
+echo "开始安装 3X-UI（用户名: $USERNAME，端口: $PORT） + BBR加速（无随机路径）"
 
 # 1. 启用 BBR 加速
 echo "正在启用 BBR 加速..."
@@ -28,7 +28,7 @@ sysctl --system >/dev/null 2>&1
 modprobe tcp_bbr || true
 echo "tcp_bbr" >> /etc/modules-load.d/bbr.conf || true
 echo "BBR 已启用（重启后完全生效）。当前状态："
-sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -q bbr && echo "bbr" || echo "未生效（可能需重启）"
+sysctl net.ipv4.tcp_available_congestion_control 2>/dev/null | grep -q bbr && echo "bbr 已生效" || echo "未生效（可能需重启）"
 
 # 2. 安装必要依赖
 echo "安装依赖（curl、wget、tar、openssl、socat）..."
@@ -50,7 +50,7 @@ case $ARCH in
     *)       echo "错误：不支持的架构 $ARCH" ; exit 1 ;;
 esac
 
-# 4. 获取最新版本并下载
+# 4. 获取最新版本并下载（MHSanaei/3x-ui 原版）
 echo "获取最新版本..."
 LATEST_VERSION=$(curl -Ls "https://api.github.com/repos/MHSanaei/3x-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"v([^"]+)".*/\1/')
 if [[ -z "$LATEST_VERSION" ]]; then
@@ -89,21 +89,20 @@ systemctl daemon-reload
 systemctl enable x-ui --now
 sleep 10  # 等待面板初始化
 
-# 6. 设置面板参数
+# 6. 设置面板参数（已去掉随机路径设置）
 /usr/local/x-ui/x-ui setting -username "$USERNAME"
 /usr/local/x-ui/x-ui setting -password "$PASSWORD"
 /usr/local/x-ui/x-ui setting -port "$PORT"
-/usr/local/x-ui/x-ui setting -webBasePath "/$BASEPATH"
 /usr/local/x-ui/x-ui restart
 
 # 7. 获取公网 IP 并输出信息
 IP=$(curl -4s ifconfig.me || curl -4s icanhazip.com || echo "未知")
 echo -e "\n\033[32m安装完成！\033[0m"
-echo "访问地址: http://$IP:$PORT/$BASEPATH/"
+echo "访问地址: http://$IP:$PORT/"
 echo "用户名: $USERNAME"
 echo "密码: $PASSWORD"
-echo "面板路径: /$BASEPATH (已随机生成，提高安全性)"
 echo "注意："
-echo "   - 当前为 HTTP 访问，如需 HTTPS 请手动配置证书后启用。"
+echo "   - 当前为 HTTP 访问，直接 http://IP:端口/ （已去掉随机路径）"
+echo "   - 如需 HTTPS 请手动配置证书后启用。"
 echo "   - BBR 已启用，建议重启服务器后 lsmod | grep bbr 检查。"
 echo "   - 如需卸载：x-ui uninstall"
