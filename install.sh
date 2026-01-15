@@ -1,23 +1,24 @@
 #!/bin/bash
-# 3X-UI 全自动安装脚本（2026-01-15 终极匹配版：精确捕捉最新 SSL 多行提示）
-# 端口: 2026 | 用户: liang | 密码: liang | BBR
+# 3X-UI 全自动安装脚本（跳过 SSL 强制版 + BBR + 端口 2026 + liang/liang）
+# 完全自动，无需手动交互，面板用 HTTP
 
 set -e
 
-export PORT="2026"
-export USERNAME="liang"
-export PASSWORD="liang"
+PORT="2026"
+USERNAME="liang"
+PASSWORD="liang"
 
 echo -e "\033[36m========================================\033[0m"
 echo -e "   3X-UI 全自动安装 (端口: \033[32m$PORT\033[0m | 用户/密码: $USERNAME/$PASSWORD)"
+echo -e "   跳过 SSL 强制设置（后续可手动加）"
 echo -e "\033[36m========================================\033[0m\n"
 
 # root 检查
 [ "$(id -u)" != "0" ] && { echo -e "\033[31m必须 root 执行！\033[0m"; exit 1; }
 
 # 依赖
-echo "安装依赖 curl expect socat ca-certificates..."
-apt update -y && apt install -y curl expect socat ca-certificates >/dev/null 2>&1 || true
+echo "安装依赖..."
+apt update -y && apt install -y curl expect socat ca-certificates wget tar >/dev/null 2>&1 || true
 
 # BBR
 echo -e "\n\033[33m启用 BBR...\033[0m"
@@ -29,84 +30,58 @@ EOF
 sysctl -p >/dev/null 2>&1
 echo -e "\033[32mBBR 已启用！\033[0m"
 
-# 开放端口（证书验证必须）
-echo "开放 80-83 端口..."
-ufw allow 80:83/tcp >/dev/null 2>&1 || true
-iptables -I INPUT -p tcp --dport 80:83 -j ACCEPT >/dev/null 2>&1 || true
+# 下载并修改官方 install.sh（跳过 SSL 部分）
+echo "下载并 patch 官方脚本（跳过 SSL）..."
+TMP_INSTALL="/tmp/3x-ui-install.sh"
+curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o "$TMP_INSTALL"
 
-# 下载官方脚本
-TEMP_SCRIPT="/tmp/3x-ui-install.sh"
-echo "下载官方脚本到 $TEMP_SCRIPT..."
-curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
+# 强制跳过 SSL 部分（注释掉或替换为 n）
+sed -i 's/read -r -p "Choose SSL certificate setup method:/# &/' "$TMP_INSTALL"
+sed -i 's/read -r -p "Choose an option (default 2 for IP):/# &/' "$TMP_INSTALL"
+sed -i 's/read -r -p "Port to use for ACME HTTP-01 listener/# &/' "$TMP_INSTALL"
+sed -i 's/read -r -p "Do you have an IPv6 address/# &/' "$TMP_INSTALL"
+sed -i 's/read -r -p "Would you like to set this certificate/# &/' "$TMP_INSTALL"
+sed -i 's/acme.sh --issue/# &/' "$TMP_INSTALL"
+sed -i 's/acme.sh --install-cert/# &/' "$TMP_INSTALL"
+sed -i 's/echo "SSL Certificate Setup (MANDATORY)"/echo "SSL 强制设置已跳过（手动添加）"/' "$TMP_INSTALL"
 
-if [ ! -s "$TEMP_SCRIPT" ]; then
-    echo -e "\033[31m下载失败\033[0m"
-    exit 1
-fi
+chmod +x "$TMP_INSTALL"
 
-chmod +x "$TEMP_SCRIPT"
-
-# expect 精确匹配你的日志（多行、Note、括号、default 2 for IP）
-echo -e "\n\033[33m开始自动化安装...\033[0m"
+# 运行修改后的脚本（expect 只处理端口）
+echo -e "\n\033[33m运行修改版官方脚本...\033[0m"
 
 expect <<EOF
-set timeout 900
+set timeout 600
 log_user 1
 
-spawn bash "$TEMP_SCRIPT"
+spawn bash "$TMP_INSTALL"
 
 expect {
     -re {Would you like to customize the Panel Port settings.*\[y/n\]:} { send "y\r" }
-    timeout { send_user "未匹配端口自定义\n"; exit 1 }
+    timeout { send_user "未匹配端口自定义\n" }
 }
 
 expect {
     -re {Please set up the panel port:.*} { send "$PORT\r" }
-    timeout { send_user "未匹配端口输入\n"; exit 1 }
+    timeout { send_user "未匹配端口输入\n" }
 }
 
-# 精确匹配日志中的 SSL 多行提示（包括 Note 和 Choose an option (default 2 for IP):）
+# 其他提示默认或 y
 expect {
-    -re {Choose SSL certificate setup method:.*Let's Encrypt for IP Address.*Note:.*Choose an option.*\(default 2 for IP\):} { send "2\r" }
-    -re {Choose an option.*default 2 for IP.*:} { send "2\r" }
-    -re {Choose SSL certificate setup method:.*} { send "2\r" }
-    timeout { send_user "未匹配 SSL 选项，请手动检查提示文本是否变化\n"; exit 1 }
-}
-
-expect {
-    -re {Do you have an IPv6 address to include.*leave empty to skip.*:} { send "\r" }
-    timeout { send_user "无IPv6，继续\n" }
-}
-
-# 处理 ACME 端口冲突（循环尝试）
-set ports {80 81 82 83}
-foreach p \$ports {
-    expect {
-        -re {Port to use for ACME HTTP-01 listener.*default 80.*:} { send "\$p\r" }
-        -re {Port.*is in use.*Enter another port.*:} { send "\$p\r" }
-        -re {Port.*is in use.*} { continue }
-        timeout { send_user "无端口提示，继续\n"; break }
-    }
-}
-
-# 兜底确认
-expect {
-    -re {Would you like to set this certificate.*\[y/n\]:} { send "y\r" }
-    -re {Would you like to modify --reloadcmd.*\[y/n\]:} { send "n\r" }
     -re {\[y/n\]:} { send "y\r" }
     eof { }
-    timeout { send_user "最终超时，假设完成\n" }
+    timeout { send_user "超时，假设完成\n" }
 }
 
 expect eof
 EOF
 
-rm -f "$TEMP_SCRIPT" 2>/dev/null
+rm -f "$TMP_INSTALL" 2>/dev/null
 
 # 强制设置账号
-echo -e "\n\033[33m等待设置账号...\033[0m"
-sleep 20
-for i in {1..30}; do
+echo -e "\n\033[33m设置账号...\033[0m"
+sleep 10
+for i in {1..20}; do
     if [ -x /usr/local/x-ui/x-ui ] && /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
         /usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" -port "$PORT" >/dev/null 2>&1
         echo -e "\033[32m账号设置完成！\033[0m"
@@ -117,14 +92,14 @@ done
 
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
 
-IP=$(curl -s4 icanhazip.com || echo "你的服务器IP")
-echo -e "\n\033[32m安装完成！\033[0m"
-echo -e "访问: https://$IP:$PORT"
+IP=$(curl -s4 icanhazip.com || echo "你的IP")
+echo -e "\n\033[32m安装完成！（SSL 已跳过）\033[0m"
+echo -e "访问: http://$IP:$PORT （HTTP 方式，建议后续手动加证书）"
 echo -e "用户名: $USERNAME"
 echo -e "密码: $PASSWORD"
 echo ""
 echo "提示："
-echo "  • 确保服务器公网 80 端口开放（证书验证必须）"
-echo "  • 浏览器证书警告可忽略（短期证书）"
-echo "  • 登录后立即修改面板路径（webBasePath）防扫描"
+echo "  • 登录后立即修改面板路径（webBasePath）"
+echo "  • 手动加证书：运行 'x-ui' → SSL证书 → 选2 → 试端口"
 echo "  • 检查状态: systemctl status x-ui"
+echo "  • 卸载: /usr/local/x-ui/x-ui uninstall"
