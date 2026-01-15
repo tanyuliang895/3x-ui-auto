@@ -1,99 +1,193 @@
 #!/bin/bash
-# 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + 账号 liang/liang + BBR 加速）
-# 最终优化版 - 2026-01-10，修复变量展开 + 宽松匹配 + BBR 集成
-
-PORT="2026"
-USERNAME="liang"
-PASSWORD="liang"
-
 set -e
-
-echo -e "\033[32m正在安装 3X-UI（全自动 + BBR 加速）...\033[0m"
-echo -e "\033[33m端口: $PORT | 用户: $USERNAME | 密码: $PASSWORD\033[0m\n"
-
-# ======================== 启用 BBR 加速 ========================
-echo -e "\033[36m启用 BBR v2 + fq 加速...\033[0m"
-
-# 启用 fq + bbr（永久生效）
-if ! sysctl net.ipv4.tcp_congestion_control | grep -q "bbr"; then
-    echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
-    echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
-    sysctl -p >/dev/null 2>&1 || true
+# 确保脚本以root执行
+if [ $EUID -ne 0 ]; then
+    echo "Error: 此脚本必须以root权限运行！"
+    echo "请执行: sudo -i 切换root后再运行本脚本"
+    exit 1
 fi
 
-# 加载模块
-modprobe tcp_bbr 2>/dev/null || true
+# ====================== 自定义配置（你的参数） ======================
+USERNAME="liang"       # 面板用户名
+PASSWORD="liang"       # 面板密码
+PANEL_PORT="2026"      # 面板端口
+# ======================================================================
 
-echo "当前拥塞控制: $(sysctl -n net.ipv4.tcp_congestion_control)"
-echo "当前队列算法: $(sysctl -n net.core.default_qdisc)"
-echo -e "\033[32mBBR 加速已启用！\033[0m\n"
-
-# ======================== 安装依赖 ========================
-if ! command -v curl >/dev/null || ! command -v expect >/dev/null; then
-    echo "安装依赖 curl expect..."
-    apt update -y && apt install -y curl expect 2>/dev/null || \
-    yum install -y curl expect 2>/dev/null || \
-    dnf install -y curl expect 2>/dev/null || \
-    echo "依赖安装失败，请手动安装 curl expect"
+# ====================== 第一步：开启 BBR 网络加速（核心新增） ======================
+echo -e "\033[32m[1/7] 配置 BBR 网络加速...\033[0m"
+# 检查内核版本（BBR需要内核≥4.9）
+KERNEL_VERSION=$(uname -r | cut -d '.' -f 1-2)
+if [[ $(echo "$KERNEL_VERSION < 4.9" | bc -l) -eq 1 ]]; then
+    echo -e "\033[33m当前内核版本过低（$KERNEL_VERSION），需升级内核以支持BBR！\033[0m"
+    read -p "是否自动升级内核并开启BBR？(y/n，默认n)：" upgrade_kernel
+    upgrade_kernel=${upgrade_kernel:-n}
+    if [ "$upgrade_kernel" = "y" ]; then
+        # 升级内核（仅支持Debian/Ubuntu）
+        if [ -f /etc/debian_version ]; then
+            apt update -y && apt install -y linux-image-generic-hwe-20.04
+            echo -e "\033[32m内核升级完成，系统将在10秒后重启！重启后重新运行本脚本即可\033[0m"
+            sleep 10 && reboot
+        else
+            echo -e "\033[31m仅支持Debian/Ubuntu系统的内核自动升级，请手动升级CentOS内核！\033[0m"
+            exit 1
+        fi
+    else
+        echo -e "\033[33m跳过BBR配置（内核版本不足）\033[0m"
+    fi
+else
+    # 写入BBR配置
+    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+    # 生效配置
+    sysctl -p > /dev/null 2>&1
+    # 验证BBR是否开启
+    if sysctl net.ipv4.tcp_congestion_control | grep -q "bbr" && lsmod | grep -q "tcp_bbr"; then
+        echo -e "\033[32mBBR加速已成功开启 ✔\033[0m"
+    else
+        echo -e "\033[33mBBR配置已写入，需重启系统后生效！\033[0m"
+    fi
 fi
 
-# ======================== 开放 80 端口 ========================
-echo "开放 80 端口（用于 IP SSL）..."
-ufw allow 80 >/dev/null 2>&1 || true
-ufw reload >/dev/null 2>&1 || true
-firewall-cmd --add-port=80/tcp --permanent >/dev/null 2>&1 || true
-firewall-cmd --reload >/dev/null 2>&1 || true
-iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true
+# ====================== 第二步：补全系统依赖 ======================
+echo -e "\033[32m[2/7] 安装/更新基础依赖...\033[0m"
+if [ -f /etc/debian_version ]; then
+    apt update -y && apt install -y curl wget sudo tar openssl nginx certbot python3-certbot-nginx jq || {
+        echo -e "\033[31m依赖安装失败！\033[0m"
+        exit 1
+    }
+elif [ -f /etc/redhat-release ]; then
+    yum install -y curl wget sudo tar openssl nginx certbot python3-certbot-nginx jq || {
+        echo -e "\033[31m依赖安装失败！\033[0m"
+        exit 1
+    }
+else
+    echo -e "\033[33m警告：未识别的系统发行版，仅支持Debian/Ubuntu/CentOS\033[0m"
+fi
 
-# ======================== 下载官方 install.sh ========================
-TEMP_SCRIPT="/tmp/3x-ui-install-temp.sh"
-curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
-chmod +x "$TEMP_SCRIPT"
+# ====================== 第三步：自动获取3x-ui最新版本（核心新增） ======================
+echo -e "\033[32m[3/7] 获取3x-ui最新版本...\033[0m"
+# 从GitHub API获取最新版本号
+LATEST_VERSION=$(curl -s https://api.github.com/repos/vaxilu/x-ui/releases/latest | jq -r '.tag_name')
+if [ -z "$LATEST_VERSION" ] || [ "$LATEST_VERSION" = "null" ]; then
+    echo -e "\033[33mGitHub API访问失败，使用默认最新版本v1.8.2\033[0m"
+    LATEST_VERSION="v1.8.2"
+fi
+echo -e "\033[32m当前3x-ui最新版本：$LATEST_VERSION\033[0m"
 
-# ======================== expect 自动化交互 ========================
-expect <<END_EXPECT
-    set timeout -1
+# 下载最新版本压缩包
+DOWNLOAD_URL="https://github.com/vaxilu/x-ui/releases/download/${LATEST_VERSION}/x-ui-linux-amd64.tar.gz"
+echo -e "\033[32m正在下载3x-ui最新版本：$DOWNLOAD_URL\033[0m"
+wget -q -O /tmp/x-ui.tar.gz $DOWNLOAD_URL || {
+    echo -e "\033[31m3x-ui最新版本下载失败！\033[0m"
+    exit 1
+}
 
-    spawn $TEMP_SCRIPT
+# 解压并安装最新版本
+rm -rf /usr/local/x-ui
+mkdir -p /usr/local/x-ui
+tar -xzf /tmp/x-ui.tar.gz -C /usr/local/x-ui
+chmod +x /usr/local/x-ui/x-ui
+rm -f /tmp/x-ui.tar.gz
 
-    # 1. 自定义端口 → y
-    expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
+# ====================== 第四步：配置x-ui系统服务 ======================
+echo -e "\033[32m[4/7] 配置x-ui系统服务...\033[0m"
+cat > /etc/systemd/system/x-ui.service << EOF
+[Unit]
+Description=x-ui
+After=network.target
 
-    # 2. 输入端口
-    expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
+[Service]
+Type=simple
+User=root
+ExecStart=/usr/local/x-ui/x-ui run
+Restart=on-failure
+RestartSec=5s
 
-    # 3. SSL 证书选择 → 回车选默认 IP 证书
-    expect -re "(?i)Choose an option" { send "\\r" }
+[Install]
+WantedBy=multi-user.target
+EOF
 
-    # 4. IPv6 → 跳过
-    expect -re "(?i)Do you have an IPv6.*skip" { send "\\r" }
+systemctl daemon-reload
+systemctl stop x-ui  # 停止旧服务（若存在）
 
-    # 5. 域名相关 → 跳过
-    expect -re "(?i)(domain|域名|enter your domain)" { send "\\r" }
+# ====================== 第五步：定制用户名/密码/端口 ======================
+echo -e "\033[32m[5/7] 配置面板参数...\033[0m"
+CONFIG_FILE="/usr/local/x-ui/config.json"
 
-    # 6. 其他 y/n → 默认 n
-    expect -re "\\[y/n\\]" { send "n\\r" }
+# 初始化配置文件
+if [ ! -f $CONFIG_FILE ]; then
+    /usr/local/x-ui/x-ui setting -username $USERNAME -password $PASSWORD
+fi
 
-    # 兜底（防官方加新提示）
-    expect -re ".*" { send "\\r" }
+# 修改面板端口
+jq --arg port "$PANEL_PORT" '.web.port = ($port | tonumber)' $CONFIG_FILE > temp.json && mv temp.json $CONFIG_FILE
 
-    expect eof
-END_EXPECT
+# 修改用户名/密码
+/usr/local/x-ui/x-ui setting -username $USERNAME -password $PASSWORD
 
-# 清理临时文件
-rm -f "$TEMP_SCRIPT" >/dev/null 2>&1
+# 释放占用端口
+if netstat -tulpn | grep -q ":$PANEL_PORT "; then
+    echo -e "\033[33m端口$PANEL_PORT已被占用，自动释放...\033[0m"
+    lsof -ti:$PANEL_PORT | xargs -r kill -9
+fi
 
-# ======================== 设置固定账号 ========================
-echo "设置固定账号 $USERNAME / $PASSWORD ..."
-/usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" >/dev/null 2>&1 || true
+# ====================== 第六步：SSL证书配置 ======================
+echo -e "\033[32m[6/7] 配置SSL证书...\033[0m"
+echo -e "\033[33mLet's Encrypt支持域名/IP证书！\033[0m"
+echo "1. Let's Encrypt域名证书（90天自动续期）"
+echo "2. Let's Encrypt IP证书（60天自动续期）"
+echo "3. 跳过（使用自签名证书测试）"
+read -p "选择配置方式（默认2）：" ssl_option
+ssl_option=${ssl_option:-2}
 
-# ======================== 重启服务 ========================
-/usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
+case $ssl_option in
+    1)
+        read -p "输入你的域名：" domain
+        # 开放80端口
+        if [ -f /etc/debian_version ]; then
+            ufw allow 80/tcp || iptables -A INPUT -p tcp --dport 80 -j ACCEPT
+        else
+            firewall-cmd --add-port=80/tcp --permanent && firewall-cmd --reload
+        fi
+        certbot certonly --standalone -d $domain --agree-tos --register-unsafely-without-email || exit 1
+        ;;
+    2)
+        ip=$(curl -s https://api.ipify.org)
+        echo -e "\033[33m当前公网IP：$ip\033[0m"
+        certbot certonly --standalone -d $ip --agree-tos --register-unsafely-without-email || exit 1
+        ;;
+    3)
+        mkdir -p /usr/local/x-ui/cert
+        openssl req -x509 -nodes -days 365 -newkey rsa:2048 \
+            -keyout /usr/local/x-ui/cert/server.key \
+            -out /usr/local/x-ui/cert/server.crt \
+            -subj "/CN=localhost"
+        echo -e "\033[32m自签名证书已生成\033[0m"
+        ;;
+    *)
+        echo -e "\033[31m无效选项！\033[0m"
+        exit 1
+        ;;
+esac
 
-echo -e "\n\033[32m安装完成！BBR 已开启\033[0m"
-echo -e "面板地址: \033[36mhttps://你的IP:$PORT\033[0m"
-echo -e "用户名: \033[36m$USERNAME\033[0m"
-echo -e "密码:   \033[36m$PASSWORD\033[0m"
-echo -e "\033[33m管理命令: x-ui\033[0m"
-echo -e "\033[31mIP证书仅6天有效，生产环境建议改域名证书\033[0m"
-echo -e "\033[32mBBR 加速已永久启用！可运行 sysctl net.ipv4.tcp_congestion_control 验证（应显示 bbr）\033[0m"
+# ====================== 第七步：启动服务并输出信息 ======================
+echo -e "\033[32m[7/7] 启动x-ui服务...\033[0m"
+systemctl enable x-ui --now
+systemctl restart x-ui
+
+# 验证服务状态
+if ! systemctl is-active --quiet x-ui; then
+    echo -e "\033[31mx-ui启动失败！查看日志：journalctl -u x-ui\033[0m"
+    exit 1
+fi
+
+# 最终信息输出
+ip=$(curl -s https://api.ipify.org)
+echo -e "\033[32m==================== 配置完成 ====================\033[0m"
+echo -e "✅ 面板地址：http://$ip:$PANEL_PORT"
+echo -e "✅ 用户名：$USERNAME"
+echo -e "✅ 密码：$PASSWORD"
+echo -e "✅ 已开启：3x-ui最新版($LATEST_VERSION) + BBR加速"
+echo -e "🔧 常用命令："
+echo -e "  查看状态：systemctl status x-ui"
+echo -e "  升级3x-ui：重新运行本脚本即可自动更新到最新版"
