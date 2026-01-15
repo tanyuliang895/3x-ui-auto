@@ -1,8 +1,8 @@
 #!/bin/bash
 
 # ============================================
-# 3X-UI 全自动安装脚本（修复版）
-# 修复版本号问题，优化下载逻辑
+# 3X-UI 全自动安装脚本（最终修复版）
+# 修复URL拼接问题，确保版本号获取纯净
 # 用户名: liang / 密码: liang / 端口: 2026
 # 完全自动化零交互，包含BBR加速
 # ============================================
@@ -21,6 +21,7 @@ INSTALL_DIR="/usr/local/3x-ui"
 CONFIG_DIR="/etc/3x-ui"
 SERVICE_FILE="/etc/systemd/system/3x-ui.service"
 LOG_FILE="/var/log/3x-ui-install-$(date +%Y%m%d-%H%M%S).log"
+ARCH=""
 
 # ============================================
 # 工具函数
@@ -94,44 +95,40 @@ EOF
 }
 
 # ============================================
-# 获取最新版本号（修复的核心）
+# 获取最新版本号（关键修复函数）
 # ============================================
 
 get_latest_version() {
-    print_status "获取 3X-UI 最新版本号..."
-    
-    # 尝试从GitHub API获取最新版本
+    # 这个函数只输出纯净的版本号，不输出任何状态信息
     local version=""
     
-    # 方法1: 使用GitHub API
+    # 方法1: 使用GitHub API（最可靠）
     if command -v curl > /dev/null 2>&1; then
-        version=$(curl -s --connect-timeout 10 \
+        version=$(curl -s --connect-timeout 10 --retry 2 \
             "https://api.github.com/repos/MHSanaei/3x-ui/releases/latest" \
-            | grep -o '"tag_name": *"[^"]*"' \
-            | head -1 \
-            | cut -d'"' -f4 \
+            | grep '"tag_name":' \
+            | sed -E 's/.*"([^"]+)".*/\1/' \
             | sed 's/^v//' 2>/dev/null)
     fi
     
     # 方法2: 如果方法1失败，尝试直接解析release页面
     if [ -z "$version" ] && command -v curl > /dev/null 2>&1; then
-        version=$(curl -s --connect-timeout 10 \
-            "https://github.com/MHSanaei/3x-ui/releases/latest" \
-            | grep -o '/releases/tag/v[0-9]*\.[0-9]*\.[0-9]*' \
+        version=$(curl -s --connect-timeout 10 --retry 2 \
+            -L "https://github.com/MHSanaEi/3x-ui/releases/latest" \
+            | grep -o '/releases/tag/v[0-9][0-9.]*[0-9]' \
             | head -1 \
             | cut -d'/' -f5 \
             | sed 's/^v//' 2>/dev/null)
     fi
     
-    # 如果无法获取版本号，使用已知可用的版本
-    if [ -z "$version" ]; then
-        print_warning "无法获取最新版本，使用已知稳定版本: 1.8.4"
-        version="1.8.4"
-    else
-        print_status "检测到最新版本: v$version"
+    # 如果获取成功，输出版本号
+    if [ -n "$version" ]; then
+        echo "$version"
+        return 0
     fi
     
-    echo "$version"
+    # 如果所有方法都失败，返回空
+    return 1
 }
 
 # ============================================
@@ -160,8 +157,6 @@ install_dependencies() {
         DEBIAN_FRONTEND=noninteractive apt-get install -y curl wget unzip > /dev/null 2>&1
     elif [ -f /etc/redhat-release ]; then
         yum install -y curl wget unzip > /dev/null 2>&1
-    elif [ -f /etc/centos-release ]; then
-        yum install -y curl wget unzip > /dev/null 2>&1
     fi
     
     # 验证必要的工具已安装
@@ -176,17 +171,31 @@ install_dependencies() {
     print_status "系统依赖安装完成"
 }
 
+# ============================================
+# 下载函数（已修复URL拼接问题）
+# ============================================
+
 download_3xui() {
     print_status "下载 3X-UI 主程序..."
     
-    # 获取最新版本号
-    local version=$(get_latest_version)
-    local filename="3x-ui-linux-${ARCH}.zip"
-    local download_url="https://github.com/MHSanaei/3x-ui/releases/download/v${version}/${filename}"
+    # 1. 获取纯净版本号
+    print_status "正在获取最新版本号..."
+    LATEST_VERSION=$(get_latest_version)
     
+    # 2. 如果获取失败，使用备用版本
+    if [ -z "$LATEST_VERSION" ]; then
+        print_warning "无法获取最新版本，使用备用版本: 1.8.4"
+        LATEST_VERSION="1.8.4"
+    else
+        print_status "检测到最新版本: v$LATEST_VERSION"
+    fi
+    
+    # 3. 构建下载链接（确保纯净）
+    local filename="3x-ui-linux-${ARCH}.zip"
+    local download_url="https://github.com/MHSanaEi/3x-ui/releases/download/v${LATEST_VERSION}/${filename}"
     print_status "下载地址: $download_url"
     
-    # 尝试下载
+    # 4. 尝试下载
     local success=0
     local temp_file="/tmp/${filename}"
     
@@ -196,7 +205,7 @@ download_3xui() {
     # 方法1: 使用curl下载
     if command -v curl > /dev/null 2>&1; then
         print_status "使用 curl 下载..."
-        if curl -L --connect-timeout 30 --retry 3 -o "$temp_file" "$download_url"; then
+        if curl -L --connect-timeout 45 --retry 3 --progress-bar -o "$temp_file" "$download_url"; then
             success=1
         fi
     fi
@@ -204,24 +213,49 @@ download_3xui() {
     # 方法2: 如果curl失败，尝试wget
     if [ $success -eq 0 ] && command -v wget > /dev/null 2>&1; then
         print_status "使用 wget 下载..."
-        if wget --timeout=30 --tries=3 -O "$temp_file" "$download_url"; then
+        if wget --timeout=45 --tries=3 --show-progress -O "$temp_file" "$download_url"; then
             success=1
         fi
     fi
     
     # 检查下载是否成功
     if [ $success -eq 0 ]; then
+        # 尝试使用备用版本
+        print_warning "主版本下载失败，尝试备用版本..."
+        local fallback_version="1.8.4"
+        local fallback_url="https://github.com/MHSanaEi/3x-ui/releases/download/v${fallback_version}/${filename}"
+        print_status "尝试备用地址: $fallback_url"
+        
+        rm -f "$temp_file" 2>/dev/null
+        
+        if command -v curl > /dev/null 2>&1; then
+            if curl -L --connect-timeout 45 --retry 2 -o "$temp_file" "$fallback_url"; then
+                success=1
+                LATEST_VERSION="$fallback_version"
+            fi
+        elif command -v wget > /dev/null 2>&1; then
+            if wget --timeout=45 --tries=2 -O "$temp_file" "$fallback_url"; then
+                success=1
+                LATEST_VERSION="$fallback_version"
+            fi
+        fi
+    fi
+    
+    if [ $success -eq 0 ]; then
         print_error "下载失败，请检查:"
         print_error "  1. 网络连接"
         print_error "  2. GitHub访问状态"
-        print_error "  3. 版本号是否正确"
+        print_error "  原始URL: https://github.com/MHSanaEi/3x-ui/releases"
     fi
     
     # 检查文件大小和完整性
-    local file_size=$(stat -c%s "$temp_file" 2>/dev/null || stat -f%z "$temp_file" 2>/dev/null || echo "0")
+    local file_size=0
+    if [ -f "$temp_file" ]; then
+        file_size=$(stat -c%s "$temp_file" 2>/dev/null || stat -f%z "$temp_file" 2>/dev/null || echo "0")
+    fi
     
     if [ "$file_size" -lt 102400 ]; then  # 小于100KB可能是错误页面
-        print_warning "文件大小异常 ($file_size 字节)，可能是错误页面"
+        print_warning "文件大小异常 ($file_size 字节)，检查文件内容..."
         
         # 检查文件内容
         if head -c 200 "$temp_file" 2>/dev/null | grep -q -i "html\|not found\|error\|404"; then
@@ -232,8 +266,8 @@ download_3xui() {
     fi
     
     # 移动文件到标准位置
-    mv "$temp_file" "/tmp/3x-ui-linux-${ARCH}.zip" 2>/dev/null
-    print_status "下载完成"
+    mv "$temp_file" "/tmp/3x-ui-linux-${ARCH}.zip" 2>/dev/null || true
+    print_status "下载完成 (版本: v$LATEST_VERSION)"
 }
 
 install_files() {
@@ -353,7 +387,7 @@ create_service() {
     cat > "$SERVICE_FILE" << EOF
 [Unit]
 Description=3X-UI Panel Service
-Documentation=https://github.com/MHSanaei/3x-ui
+Documentation=https://github.com/MHSanaEi/3x-ui
 After=network.target
 Wants=network.target
 
@@ -430,8 +464,8 @@ start_service() {
         
         # 尝试直接运行二进制文件查看错误
         if [ -f "$INSTALL_DIR/x-ui" ]; then
-            echo "尝试直接运行二进制文件..."
-            timeout 5 "$INSTALL_DIR/x-ui" --help || true
+            echo "尝试直接运行二进制文件查看输出..."
+            timeout 3 "$INSTALL_DIR/x-ui" --help 2>&1 | head -20 || true
         fi
         
         # 再次尝试启动
@@ -532,7 +566,6 @@ show_result() {
 ================================
 安装时间: $(date)
 系统架构: $(uname -m)
-面板版本: $(get_latest_version)
 
 访问信息:
   HTTP:  http://${local_ip}:${PANEL_PORT}
@@ -574,7 +607,7 @@ EOF
 main() {
     echo ""
     echo "========================================"
-    echo "  3X-UI 全自动安装脚本（修复版）"
+    echo "  3X-UI 全自动安装脚本（最终修复版）"
     echo "========================================"
     echo "  用户名: $PANEL_USERNAME"
     echo "  密码: $PANEL_PASSWORD"
