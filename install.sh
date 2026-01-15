@@ -1,121 +1,54 @@
 #!/bin/bash
+# 3X-UI 一键全自动安装脚本（零交互、固定端口 2026 + 账号 liang/liang + BBR + 证书申请）
+# 需要证书版 - 覆盖 80 端口确认 + 根路径
 
-# 配置（你的需求）
-PANEL_PORT=2026
+PORT="2026"
 USERNAME="liang"
 PASSWORD="liang"
 
-# 自动装 expect（如果没有）
-if ! command -v expect &> /dev/null; then
-    echo "Installing expect..."
-    apt update -qq && apt install -y expect || yum install -y expect || dnf install -y expect
+set -e
+
+echo -e "\033[32m正在安装 3X-UI（全自动 + BBR + 证书申请）...\033[0m"
+echo -e "\033[33m端口: $PORT | 用户: $USERNAME | 密码: $PASSWORD\033[0m\n"
+
+# BBR 加速
+echo -e "\033[36m启用 BBR...\033[0m"
+if ! sysctl net.ipv4.tcp_congestion_control | grep -q "bbr"; then
+    echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
+    sysctl -p >/dev/null 2>&1 || true
+fi
+modprobe tcp_bbr 2>/dev/null || true
+echo "当前拥塞控制: $(sysctl -n net.ipv4.tcp_congestion_control)"
+echo -e "\033[32mBBR 已开启！\033[0m\n"
+
+# 依赖
+if ! command -v curl >/dev/null || ! command -v expect >/dev/null; then
+    echo "安装依赖..."
+    apt update -y && apt install -y curl expect 2>/dev/null || yum install -y curl expect 2>/dev/null || dnf install -y curl expect 2>/dev/null
 fi
 
-# 清理旧的
-systemctl stop x-ui 2>/dev/null || true
-systemctl disable x-ui 2>/dev/null || true
-rm -f /etc/systemd/system/x-ui.service
-systemctl daemon-reload 2>/dev/null
+# 开放 80 端口（证书必须）
+echo "开放 80 端口..."
+ufw allow 80 >/dev/null 2>&1 || true
+ufw reload >/dev/null 2>&1 || true
+firewall-cmd --add-port=80/tcp --permanent >/dev/null 2>&1 || true
+firewall-cmd --reload >/dev/null 2>&1 || true
+iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true
 
-echo "Downloading official 3x-ui install script..."
-curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o /tmp/install-3x-ui.sh
-chmod +x /tmp/install-3x-ui.sh
+# 下载官方脚本
+TEMP_SCRIPT="/tmp/3x-ui.sh"
+curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
+chmod +x "$TEMP_SCRIPT"
 
-echo "Starting fully automatic (zero-interaction) installation..."
+# expect - 保留证书申请，覆盖 80 端口确认
+expect <<END_EXPECT
+    set timeout -1
 
-expect <<'END'
-set timeout 180
+    spawn $TEMP_SCRIPT
 
-spawn /tmp/install-3x-ui.sh
+    expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
+    expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
 
-# 端口自定义：回答 y
-expect {
-    "Would you like to customize the Panel Port settings? (If not, a random port will be applied) [y/n]: " { send "y\r" }
-    -re {Would you like to customize.*\[y/n\]:}     { send "y\r" }  ;# 模糊匹配防文字微变
-    timeout { send_user "\nTimeout on port customize prompt\n" }
-}
-
-# 输入端口号
-expect {
-    "Please set up the panel port: " { send "2026\r" }
-    timeout { send_user "\nTimeout on port input\n" }
-}
-
-# SSL 选项：选 2 (IP cert)
-expect {
-    "Choose an option" { send "2\r" }
-    -re {Choose an option.*default.*IP} { send "2\r" }
-    timeout { send_user "\nTimeout on SSL choose\n" }
-}
-
-# IPv6：跳过
-expect {
-    "Do you have an IPv6 address to include? (leave empty to skip): " { send "\r" }
-    timeout { }
-}
-
-# ACME 端口：默认 80
-expect {
-    "Port to use for ACME HTTP-01 listener (default 80): " { send "\r" }
-    timeout { }
-}
-
-# 如果 80 占用：试 81
-expect {
-    "Enter another port for acme.sh standalone listener (leave empty to abort): " { send "81\r" }
-    timeout { }
-}
-# 如果还占用：试 82
-expect {
-    "Enter another port for acme.sh standalone listener (leave empty to abort): " { send "82\r" }
-    timeout { }
-}
-# 最终放弃（如果还不行）
-expect {
-    "Enter another port for acme.sh standalone listener (leave empty to abort): " { send "\r" }
-    timeout { }
-}
-
-# reloadcmd：不改
-expect {
-    "Would you like to modify --reloadcmd for ACME? (y/n): " { send "n\r" }
-    timeout { }
-}
-
-# 设置证书到面板：是
-expect {
-    "Would you like to set this certificate for the panel? (y/n): " { send "y\r" }
-    timeout { }
-}
-
-expect eof
-END
-
-rm -f /tmp/install-3x-ui.sh
-
-sleep 10  # 等服务起来
-
-if systemctl is-active x-ui &>/dev/null; then
-    echo "Installation successful!"
-
-    # 改用户名密码
-    echo "Setting username/password to liang/liang..."
-    x-ui setting -username liang -password liang
-
-    echo ""
-    echo "========================================"
-    echo "Done! Access panel at:"
-    echo "http://你的IP:2026"
-    echo "Username: liang"
-    echo "Password: liang"
-    echo "(https if cert worked)"
-    echo "Check status: x-ui"
-    echo "Logs: journalctl -u x-ui -e"
-    echo "========================================"
-else
-    echo "Failed. Possible reasons:"
-    echo "- Port 80/81/82 blocked/occupied (for cert validation)"
-    echo "- Network/firewall blocking Let's Encrypt"
-    echo "- Run manual install to debug: bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)"
-    echo "Try: ufw allow 80,81,82,2026 ; ufw reload"
-fi
+    # SSL 菜单 - 回车选默认 2 (IP证书)
+    expect
