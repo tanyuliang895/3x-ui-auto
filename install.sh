@@ -1,11 +1,10 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + 账号 liang/liang + BBR 加速）
-# 修复版 - 覆盖 80 端口确认 + 根路径 + 证书申请
+# 加强版 - 2026-01-15，覆盖 80 端口确认 + 所有 SSL 提示
 
 PORT="2026"
 USERNAME="liang"
 PASSWORD="liang"
-WEB_BASE_PATH="/"  # 强制根路径
 
 set -e
 
@@ -67,12 +66,6 @@ END_EXPECT
 
 rm -f "$TEMP_SCRIPT" >/dev/null 2>&1
 
-# 设置根路径 + 关闭 HTTPS（备用）
-echo "设置根路径 + 关闭 HTTPS（备用）..."
-/usr/local/x-ui/x-ui setting -webBasePath "$WEB_BASE_PATH" >/dev/null 2>&1 || true
-/usr/local/x-ui/x-ui setting -https false >/dev/null 2>&1 || true
-/usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
-
 # 设置账号
 echo "设置固定账号 $USERNAME / $PASSWORD ..."
 /usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" >/dev/null 2>&1 || true
@@ -81,9 +74,9 @@ echo "设置固定账号 $USERNAME / $PASSWORD ..."
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
 
 echo -e "\n\033[32m安装完成！\033[0m"
-echo -e "面板地址: \033[36mhttp://你的IP:$PORT\033[0m （根路径）"
+echo -e "面板地址: \033[36mhttps://你的IP:$PORT\033[0m"
 echo -e "用户名: \033[36m$USERNAME\033[0m"
 echo -e "密码:   \033[36m$PASSWORD\033[0m"
 echo -e "\033[33m管理命令: x-ui\033[0m"
+echo -e "\033[31mIP证书6天有效，生产建议改域名证书\033[0m"
 echo -e "\033[32mBBR 已永久开启\033[0m"
-echo -e "\033[31m证书申请可能失败（限额），用 http 访问面板（忽略警告）\033[0m"
