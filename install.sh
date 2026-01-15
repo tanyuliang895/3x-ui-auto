@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + 账号 liang/liang + BBR 加速）
-# 修复版 - 2026-01-15，覆盖 IPv6 确认 + 80 端口 + 加强兜底
+# 最终修复版 - 覆盖 IPv6 + 80 端口 + 超级兜底
 
 PORT="2026"
 USERNAME="liang"
@@ -45,7 +45,7 @@ TEMP_SCRIPT="/tmp/3x-ui-install-temp.sh"
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 chmod +x "$TEMP_SCRIPT"
 
-# expect - 加强匹配，覆盖 IPv6 + 80 端口 + 兜底
+# expect - 覆盖 IPv6 + 80 端口 + 超级兜底
 expect <<END_EXPECT
     set timeout -1
 
@@ -60,8 +60,8 @@ expect <<END_EXPECT
     # 80 端口确认 - 回车默认 80
     expect -re "(?i)Port to use for ACME HTTP-01 listener" { send "\\r" }
 
-    # IPv6 确认 - 回车跳过（留空）
-    expect -re "(?i)Do you have an IPv6.*skip" { send "\\r" }
+    # IPv6 确认 - 回车留空跳过
+    expect -re "(?i)Do you have an IPv6.*skip|IPv6 address to include" { send "\\r" }
 
     # 域名相关 → 跳过
     expect -re "(?i)(domain|域名|enter your domain)" { send "\\r" }
