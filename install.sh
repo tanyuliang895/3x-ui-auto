@@ -1,43 +1,108 @@
-#!/bin/bash
-# 3X-UI 一键安装脚本 - 彻底无证书版（纯HTTP）
+#!/usr/bin/env bash
+# 文件名建议：install-3x-ui-auto.sh
+# 功能：一键安装/更新 3x-ui，并设置用户名 liang / 密码 liang / 端口 2026 + 开启 BBR
 
-PORT=2026
-USER=liang
-PASS=liang
+set -e
 
-echo "安装 3X-UI（无证书，纯HTTP）..."
+red='\033[0;31m'
+green='\033[0;32m'
+plain='\033[0m'
 
-# BBR加速
-echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
-echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
-sysctl -p >/dev/null 2>&1
-modprobe tcp_bbr 2>/dev/null
+echo -e "${green}开始安装/更新 3x-ui (用户名: liang | 密码: liang | 端口: 2026)${plain}"
 
-# 依赖
-apt update -y && apt install -y curl expect >/dev/null 2>&1 || true
+# ==================== 自动开启 BBR ====================
+enable_bbr() {
+    echo -e "${green}正在启用 BBR 加速...${plain}"
+    
+    if ! grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf; then
+        cat >> /etc/sysctl.conf <<EOF
+net.core.default_qdisc = fq
+net.ipv4.tcp_congestion_control = bbr
+EOF
+    fi
+    
+    sysctl -p >/dev/null 2>&1
+    
+    # 检查当前是否已启用 BBR
+    current_cc=$(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')
+    if [[ "$current_cc" == "bbr" ]]; then
+        echo -e "${green}BBR 已启用 (当前拥塞控制: bbr)${plain}"
+    else
+        modprobe tcp_bbr
+        sysctl -w net.ipv4.tcp_congestion_control=bbr
+        echo -e "${green}BBR 临时启用成功，再次重启服务器后永久生效${plain}"
+    fi
+    
+    lsmod | grep -q bbr && echo -e "${green}tcp_bbr 模块已加载${plain}" || echo -e "${red}警告：tcp_bbr 模块未加载（可能内核不支持）${plain}"
+}
 
-# 下载官方脚本
-curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o /tmp/3x.sh
-chmod +x /tmp/3x.sh
+enable_bbr
 
-# expect - 跳过所有交互（证书相关直接回车跳过）
-expect <<END
-    set timeout -1
-    spawn /tmp/3x.sh
-    expect -re "customize.*\[y/n\]" { send "y\r" }
-    expect -re "panel port:" { send "$PORT\r" }
-    expect -re ".*" { send "\r" }  # 任何剩余提示都回车跳过
-    expect eof
-END
+# ==================== 下载并安装最新 3x-ui ====================
+TMP_DIR="/tmp/3x-ui-install"
+INSTALL_DIR="/usr/local/x-ui"
+mkdir -p "$TMP_DIR" "$INSTALL_DIR"
 
-rm -f /tmp/3x.sh
+ARCH=$(uname -m)
+case $ARCH in
+    x86_64|amd64)  ARCH_SUFFIX="amd64" ;;
+    aarch64|arm64) ARCH_SUFFIX="arm64" ;;
+    *) echo -e "${red}不支持的架构: $ARCH${plain}"; exit 1 ;;
+esac
 
-# 强制关闭HTTPS + 根路径 + 账号
-/usr/local/x-ui/x-ui setting -https false >/dev/null 2>&1 || true
-/usr/local/x-ui/x-ui setting -webBasePath "/" >/dev/null 2>&1 || true
-/usr/local/x-ui/x-ui setting -username $USER -password $PASS >/dev/null 2>&1 || true
-/usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
+echo -e "${green}正在获取最新版本...${plain}"
+LATEST_TAG=$(curl -s "https://api.github.com/repos/MHSanaei/3x-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
-echo "完成！访问 http://你的IP:$PORT"
-echo "用户: $USER   密码: $PASS"
-echo "命令: x-ui"
+if [[ -z "$LATEST_TAG" ]]; then
+    echo -e "${red}无法获取最新版本，使用官方一键安装作为备用${plain}"
+    bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
+else
+    echo -e "${green}最新版本: ${LATEST_TAG}${plain}"
+    
+    cd "$TMP_DIR"
+    FILE_NAME="x-ui-linux-${ARCH_SUFFIX}.tar.gz"
+    wget -N --no-check-certificate "https://github.com/MHSanaei/3x-ui/releases/download/${LATEST_TAG}/${FILE_NAME}"
+    
+    tar zxvf "${FILE_NAME}"
+    chmod +x x-ui/x-ui x-ui/bin/xray*
+    
+    # 停止旧服务（如果存在）
+    systemctl stop x-ui 2>/dev/null || true
+    
+    # 替换核心文件
+    cp -f x-ui/x-ui /usr/bin/x-ui
+    cp -f x-ui/x-ui.sh /usr/bin/x-ui
+    cp -f x-ui/x-ui.service /etc/systemd/system/x-ui.service 2>/dev/null || true
+    cp -rf x-ui/* "$INSTALL_DIR"/
+    
+    systemctl daemon-reload
+    systemctl enable x-ui
+    systemctl restart x-ui
+fi
+
+# 等待服务启动
+sleep 5
+
+# ==================== 设置用户名、密码、端口 ====================
+echo -e "${green}正在设置面板账号: liang / liang  | 端口: 2026${plain}"
+
+/usr/local/x-ui/x-ui setting -username liang -password liang -port 2026 >/dev/null 2>&1
+
+# 重启面板使设置生效
+systemctl restart x-ui
+
+# 清理临时文件
+cd / && rm -rf "$TMP_DIR"
+
+# ==================== 最终提示 ====================
+panel_ip=$(curl -s ifconfig.me || curl -s icanhazip.com || echo "你的服务器IP")
+
+echo -e "\n${green}3x-ui 安装/更新完成！${plain}"
+echo -e "面板地址: http://${panel_ip}:2026  （建议尽快配置 SSL 证书后使用 https）"
+echo -e "用户名: ${green}liang${plain}"
+echo -e "密码:   ${green}liang${plain}"
+echo -e "端口:   ${green}2026${plain}"
+echo -e "\n${yellow}强烈建议登录后立即修改密码，并开启面板中的 Fail2Ban 防爆破功能！${plain}"
+echo -e "BBR 加速已尝试开启（重启服务器后完全生效）"
+echo -e "查看 BBR 状态: ${green}sysctl net.ipv4.tcp_congestion_control${plain}"
+echo -e "查看服务状态: ${green}systemctl status x-ui${plain}"
