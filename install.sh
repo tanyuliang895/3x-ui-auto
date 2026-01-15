@@ -1,86 +1,61 @@
 #!/bin/bash
-# 3X-UI 一键安装 + HTTP（端口 2026） + BBR
-# 作者：优化版 by 宇亮
-# 特点：HTTP访问，端口2026，无HTTPS，无503，自动检查端口
+# 3X-UI 一键安装脚本（用户名: liang, 密码: liang, 端口: 2026）
+# 脚本作者：宇亮 @tanyuliang895@gmail.com
+# 用法：bash <(curl -Ls <你的脚本地址>)
 
-set -e
+# 配置参数（根据你的需求硬编码）
+USERNAME="liang"   # 用户名
+PASSWORD="liang"   # 密码
+PORT="2026"        # 面板端口
 
-### ===== 基础参数 =====
-USERNAME="liang"
-PASSWORD="liang"
-PORT="2026"
-WEB_PATH="/liang"
+# 自动安装逻辑
+set -e  # 任何错误立即终止
+echo "🔧 正在安装 3X-UI (用户名: $USERNAME, 端口: $PORT)..."
 
-IP=$(curl -s4 icanhazip.com)
+# 依赖检查（自动安装 curl 和 socat）
+if ! command -v curl &> /dev/null; then
+  echo "安装依赖: curl..."
+  if [ -x "$(command -v apt-get)" ]; then
+    sudo apt-get update && sudo apt-get install -y curl socat
+  elif [ -x "$(command -v yum)" ]; then
+    sudo yum install -y curl socat
+  else
+    echo "❌ 错误：不支持的系统！请手动安装 curl 和 socat 后重试。"
+    exit 1
+  fi
+fi
 
-echo -e "\n[+] 开始零交互安装 3X-UI + HTTP访问\n"
+# 下载 3x-ui 安装脚本
+echo "下载 3X-UI 官方安装脚本..."
+curl -Ls "https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh" -o /tmp/3xui_install.sh
+chmod +x /tmp/3xui_install.sh
 
-### ===== 1. 启用 BBR =====
-echo "[+] 启用 BBR 加速..."
-sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
-sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
-cat >> /etc/sysctl.conf <<EOF
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
-EOF
-sysctl -p >/dev/null 2>&1
-echo "[+] BBR 已启用"
-
-### ===== 2. 安装 3X-UI（官方脚本）=====
-echo "[+] 安装 3X-UI 面板..."
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
+# 执行安装脚本并自动填写信息
+echo "执行 3X-UI 安装脚本..."
+bash /tmp/3xui_install.sh <<EOF
 y
-y
-$PORT
 $USERNAME
 $PASSWORD
-$WEB_PATH
+$PORT
 EOF
 
-### ===== 3. 强制禁用 HTTPS & 指定端口 =====
-echo "[+] 强制禁用 HTTPS，确保 HTTP 模式..."
-x-ui setting -s https false
-x-ui setting -s port $PORT
+# 启用 BBR TCP 加速
+echo "启用 BBR TCP 加速..."
+cat >/etc/sysctl.d/99-bbr.conf <<EOF
+net.core.default_qdisc=fq
+net.ipv4.tcp_congestion_control=bbr
+EOF
 
-echo "[+] 重启 3X-UI 面板..."
-x-ui restart
-sleep 3
+sysctl --system
 
-### ===== 4. 检查端口监听 =====
-echo "[+] 检查面板是否在端口 $PORT 监听..."
-LISTEN=$(ss -tunlp | grep ":$PORT" || true)
-if [[ -z "$LISTEN" ]]; then
-    echo "[!] 端口 $PORT 未监听，可能被占用，尝试杀掉旧进程并重启..."
-    pkill -f x-ui || true
-    sleep 2
-    x-ui restart
-    sleep 3
-    LISTEN=$(ss -tunlp | grep ":$PORT" || true)
-    if [[ -z "$LISTEN" ]]; then
-        echo "[✖] 面板仍未启动，请查看日志：journalctl -u x-ui -n 50"
-        exit 1
-    fi
-fi
-echo "[+] 面板已在端口 $PORT 正常监听"
+echo "BBR 状态检查:"
+sysctl net.ipv4.tcp_congestion_control
+lsmod | grep bbr || true
 
-### ===== 5. 防火墙检测 =====
-echo "[+] 检查防火墙是否允许 $PORT 端口..."
-if command -v ufw >/dev/null 2>&1; then
-    ufw allow $PORT/tcp >/dev/null 2>&1 || true
-    echo "[+] 防火墙已放行端口 $PORT"
-fi
-
-### ===== 6. 完成信息 =====
-echo -e "\n================ 安装完成 ================\n"
-echo "面板地址: http://$IP:$PORT$WEB_PATH/"
+# 输出访问信息
+IP=$(curl -4s icanhazip.com)
+echo -e "\n\033[32m✅ 安装完成！\033[0m"
+echo "访问地址: http://$IP:$PORT"
 echo "用户名: $USERNAME"
 echo "密码: $PASSWORD"
-echo "协议: HTTP（无加密，端口 $PORT）"
-echo
-echo "安全建议："
-echo " - 登录后立即修改密码"
-echo " - 修改默认端口 / 路径"
-echo " - 启用防火墙保护面板"
-echo
-echo "脚本作者：优化版 by 宇亮"
-echo "=========================================\n"
+echo "BBR TCP 加速已启用"
