@@ -18,14 +18,14 @@ apt update -y && apt install -y curl expect >/dev/null 2>&1 || true
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o /tmp/3x.sh
 chmod +x /tmp/3x.sh
 
-# expect - 超级宽松跳过所有证书提示
+# expect - 任何证书提示都跳过
 expect <<END
     set timeout -1
     spawn /tmp/3x.sh
     expect -re "customize.*\[y/n\]" { send "y\r" }
     expect -re "panel port:" { send "$PORT\r" }
-    expect -re "Choose.*option|SSL Certificate Setup|RECOMMENDED|MANDATORY" { send "n\r" }  # 跳过证书
-    expect -re ".*" { send "\r" }  # 任何剩余提示都回车
+    expect -re "SSL|certificate|Choose an option|RECOMMENDED|MANDATORY" { send "n\r" }  # 跳过证书
+    expect -re ".*" { send "\r" }  # 所有剩余提示回车
     expect eof
 END
 
@@ -39,5 +39,4 @@ rm -f /tmp/3x.sh
 
 echo "完成！访问 http://你的IP:$PORT"
 echo "用户: $USER   密码: $PASS"
-echo "命令: x-ui"
 echo "登录后手动申请证书（面板设置 → SSL 证书）"
