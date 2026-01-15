@@ -1,7 +1,7 @@
 #!/bin/bash
-# 3X-UI 一键安装脚本（用户名: liang, 密码: liang, 端口: 2026）
+# 3X-UI 一键安装脚本（零交互 + 用户名: liang, 密码: liang, 端口: 2026 + BBR加速）
 # 用法：
-# bash <(curl -Ls https://raw.githubusercontent.com/你的仓库/3x-ui-auto/main/install.sh)
+# bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/3x-ui-auto/main/install.sh)
 
 set -e
 
@@ -35,16 +35,14 @@ if ! command -v curl >/dev/null 2>&1; then
   fi
 fi
 
-# ====== 安装 3X-UI ======
+# ====== 安装 3X-UI（零交互） ======
 echo "开始安装 3X-UI..."
-bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
+bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh) <<EOF
+n
+EOF
 
-# ====== 等待服务生成 ======
-sleep 2
-
-# ====== 配置 3X-UI 面板 ======
+# ====== 配置面板账号与端口 ======
 echo "配置面板账号与端口..."
-
 x-ui setting <<EOF
 $PORT
 $USERNAME
