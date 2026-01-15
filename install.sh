@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互、无证书、固定端口 2026 + 账号 liang/liang + BBR 加速）
-# 无证书版 - 彻底跳过 SSL 全部提示 + 根路径
+# 强制绕过证书版 - 2026-01-15，彻底跳过 SSL 菜单 + 根路径
 
 PORT="2026"
 USERNAME="liang"
@@ -33,19 +33,20 @@ TEMP_SCRIPT="/tmp/3x-ui.sh"
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 chmod +x "$TEMP_SCRIPT"
 
-# expect - 彻底跳过证书（故意 n + 超级兜底）
+# expect - 强制绕过证书菜单（匹配菜单后立即退出流程）
 expect <<END_EXPECT
     set timeout -1
 
     spawn $TEMP_SCRIPT
 
+    # 端口自定义
     expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
     expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
 
-    # SSL 菜单 - 故意 n 跳过证书申请
+    # SSL 菜单出现 → 立即 send "n" 无效输入 + 跳过后续
     expect -re "(?i)Choose an option" { send "n\\r" }
 
-    # 后续所有证书相关提示 - 全部回车或 n 跳过
+    # 后续所有证书/验证提示 - 全部回车或 n 跳过
     expect -re "(?i)(Port to use|ACME|IPv6|domain|域名|enter|SSL|certificate)" { send "\\r" }
     expect -re "\\[y/n\\]" { send "n\\r" }
     expect -re ".*" { send "\\r" }  # 超级兜底
