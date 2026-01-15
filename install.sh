@@ -1,5 +1,5 @@
 #!/bin/bash
-# 3X-UI 全自动安装脚本（2026-01-15 终极精确匹配版：完美捕捉最新 SSL 多行提示）
+# 3X-UI 全自动安装脚本（2026-01-15 终极匹配版：精确捕捉最新 SSL 多行提示）
 # 端口: 2026 | 用户: liang | 密码: liang | BBR
 
 set -e
@@ -29,7 +29,7 @@ EOF
 sysctl -p >/dev/null 2>&1
 echo -e "\033[32mBBR 已启用！\033[0m"
 
-# 开放端口（证书必须）
+# 开放端口（证书验证必须）
 echo "开放 80-83 端口..."
 ufw allow 80:83/tcp >/dev/null 2>&1 || true
 iptables -I INPUT -p tcp --dport 80:83 -j ACCEPT >/dev/null 2>&1 || true
@@ -67,10 +67,10 @@ expect {
 
 # 精确匹配日志中的 SSL 多行提示（包括 Note 和 Choose an option (default 2 for IP):）
 expect {
-    -re {Choose SSL certificate setup method:.*Let's Encrypt for IP Address.*Choose an option.*\(default 2 for IP\):} { send "2\r" }
+    -re {Choose SSL certificate setup method:.*Let's Encrypt for IP Address.*Note:.*Choose an option.*\(default 2 for IP\):} { send "2\r" }
     -re {Choose an option.*default 2 for IP.*:} { send "2\r" }
     -re {Choose SSL certificate setup method:.*} { send "2\r" }
-    timeout { send_user "未匹配 SSL 选项（请检查提示文本是否变化）\n"; exit 1 }
+    timeout { send_user "未匹配 SSL 选项，请手动检查提示文本是否变化\n"; exit 1 }
 }
 
 expect {
@@ -78,7 +78,7 @@ expect {
     timeout { send_user "无IPv6，继续\n" }
 }
 
-# ACME 端口冲突处理
+# 处理 ACME 端口冲突（循环尝试）
 set ports {80 81 82 83}
 foreach p \$ports {
     expect {
@@ -89,7 +89,7 @@ foreach p \$ports {
     }
 }
 
-# 后续确认
+# 兜底确认
 expect {
     -re {Would you like to set this certificate.*\[y/n\]:} { send "y\r" }
     -re {Would you like to modify --reloadcmd.*\[y/n\]:} { send "n\r" }
