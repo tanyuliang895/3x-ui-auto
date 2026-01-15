@@ -1,98 +1,99 @@
 #!/bin/bash
-# 3X-UI 全自动安装脚本（最终官方提取方式版 - 直接在 /usr/local/ 解压，避免 mv 导致的路径问题）
-# 端口: 2026   用户名: liang   密码: liang
-# 包含 BBR 加速 + 自动获取最新版本
-# 用法：bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/3x-ui-auto/main/install.sh)
-
-set -e
+# 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + 账号 liang/liang + BBR 加速）
+# 最终优化版 - 2026-01-10，修复变量展开 + 宽松匹配 + BBR 集成
 
 PORT="2026"
 USERNAME="liang"
 PASSWORD="liang"
 
-echo -e "\033[36m========================================\033[0m"
-echo -e "   3X-UI 一键全自动安装 (端口: \033[32m$PORT\033[0m)"
-echo -e "   用户名: \033[32m$USERNAME\033[0m   密码: \033[32m$PASSWORD\033[0m"
-echo -e "\033[36m========================================\033[0m\n"
+set -e
 
-# 检查 root
-[[ $EUID -ne 0 ]] && { echo -e "\033[31m必须以 root 运行！\033[0m"; exit 1; }
+echo -e "\033[32m正在安装 3X-UI（全自动 + BBR 加速）...\033[0m"
+echo -e "\033[33m端口: $PORT | 用户: $USERNAME | 密码: $PASSWORD\033[0m\n"
 
-# 依赖
-echo "安装依赖..."
-apt update -y && apt install -y wget tar ca-certificates || yum install -y wget tar ca-certificates || dnf install -y wget tar ca-certificates || true
+# ======================== 启用 BBR 加速 ========================
+echo -e "\033[36m启用 BBR v2 + fq 加速...\033[0m"
 
-# BBR
-echo -e "\n\033[33m启用 BBR...\033[0m"
-modprobe tcp_bbr 2>/dev/null || true
-echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
-echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
-sysctl -p >/dev/null 2>&1
-echo -e "\033[32mBBR 已启用！\033[0m"
-
-# 最新版本
-LATEST=$(curl -s https://api.github.com/repos/MHSanaei/3x-ui/releases/latest | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
-[[ -z "$LATEST" ]] && { echo -e "\033[31m获取版本失败\033[0m"; exit 1; }
-echo -e "\033[32m最新版本: $LATEST\033[0m"
-
-# 架构
-case $(uname -m) in
-    x86_64|amd64) ARCH="amd64" ;;
-    aarch64|arm64) ARCH="arm64" ;;
-    *) ARCH="amd64" ;;
-esac
-
-URL="https://github.com/MHSanaei/3x-ui/releases/download/${LATEST}/x-ui-linux-${ARCH}.tar.gz"
-
-XUI_DIR="/usr/local/x-ui"
-
-# 清理旧版
-systemctl stop x-ui 2>/dev/null || true
-rm -rf "$XUI_DIR" /usr/bin/x-ui 2>/dev/null
-
-# 官方方式：直接在 /usr/local/ 解压（自动创建 x-ui/ 文件夹）
-echo -e "\033[33m下载并解压到 /usr/local/... \033[0m"
-cd /usr/local/
-wget --no-check-certificate -O x-ui.tar.gz "$URL" || { echo -e "\033[31m下载失败\033[0m"; exit 1; }
-tar zxvf x-ui.tar.gz
-rm -f x-ui.tar.gz
-
-# 进入 x-ui 子目录（现在是 /usr/local/x-ui/）
-cd x-ui || { echo -e "\033[31m未找到 x-ui 子目录！\033[0m"; exit 1; }
-
-echo -e "\033[33m设置权限...\033[0m"
-chmod +x x-ui x-ui.sh bin/xray-linux-* 2>/dev/null || true
-
-# 服务文件
-echo -e "\033[33m安装服务...\033[0m"
-if [ -f x-ui.service.debian ]; then
-    cp x-ui.service.debian /etc/systemd/system/x-ui.service
-elif [ -f x-ui.service.rhel ]; then
-    cp x-ui.service.rhel /etc/systemd/system/x-ui.service
-else
-    wget -O /etc/systemd/system/x-ui.service https://raw.githubusercontent.com/MHSanaei/3x-ui/master/x-ui.service.debian
+# 启用 fq + bbr（永久生效）
+if ! sysctl net.ipv4.tcp_congestion_control | grep -q "bbr"; then
+    echo "net.core.default_qdisc = fq" >> /etc/sysctl.conf
+    echo "net.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
+    sysctl -p >/dev/null 2>&1 || true
 fi
 
-chmod 644 /etc/systemd/system/x-ui.service
-systemctl daemon-reload
-systemctl enable x-ui >/dev/null 2>&1
+# 加载模块
+modprobe tcp_bbr 2>/dev/null || true
 
-# 设置账户
-echo -e "\033[33m设置账户...\033[0m"
-./x-ui setting -username "$USERNAME" -password "$PASSWORD" -port "$PORT" >/dev/null 2>&1
+echo "当前拥塞控制: $(sysctl -n net.ipv4.tcp_congestion_control)"
+echo "当前队列算法: $(sysctl -n net.core.default_qdisc)"
+echo -e "\033[32mBBR 加速已启用！\033[0m\n"
 
-# 启动
-systemctl restart x-ui
-sleep 3
+# ======================== 安装依赖 ========================
+if ! command -v curl >/dev/null || ! command -v expect >/dev/null; then
+    echo "安装依赖 curl expect..."
+    apt update -y && apt install -y curl expect 2>/dev/null || \
+    yum install -y curl expect 2>/dev/null || \
+    dnf install -y curl expect 2>/dev/null || \
+    echo "依赖安装失败，请手动安装 curl expect"
+fi
 
-# 输出
-IP=$(curl -s4 icanhazip.com || echo "你的IP")
-echo -e "\n\033[32m安装成功！\033[0m"
-echo -e "面板: \033[36mhttp://$IP:$PORT\033[0m"
-echo -e "用户: \033[32m$USERNAME\033[0m"
-echo -e "密码: \033[32m$PASSWORD\033[0m"
-echo ""
-echo "建议：登录后修改面板路径防扫描"
-echo "状态: systemctl status x-ui"
-echo "卸载: /usr/local/x-ui/x-ui uninstall"
-echo ""
+# ======================== 开放 80 端口 ========================
+echo "开放 80 端口（用于 IP SSL）..."
+ufw allow 80 >/dev/null 2>&1 || true
+ufw reload >/dev/null 2>&1 || true
+firewall-cmd --add-port=80/tcp --permanent >/dev/null 2>&1 || true
+firewall-cmd --reload >/dev/null 2>&1 || true
+iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true
+
+# ======================== 下载官方 install.sh ========================
+TEMP_SCRIPT="/tmp/3x-ui-install-temp.sh"
+curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
+chmod +x "$TEMP_SCRIPT"
+
+# ======================== expect 自动化交互 ========================
+expect <<END_EXPECT
+    set timeout -1
+
+    spawn $TEMP_SCRIPT
+
+    # 1. 自定义端口 → y
+    expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
+
+    # 2. 输入端口
+    expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
+
+    # 3. SSL 证书选择 → 回车选默认 IP 证书
+    expect -re "(?i)Choose an option" { send "\\r" }
+
+    # 4. IPv6 → 跳过
+    expect -re "(?i)Do you have an IPv6.*skip" { send "\\r" }
+
+    # 5. 域名相关 → 跳过
+    expect -re "(?i)(domain|域名|enter your domain)" { send "\\r" }
+
+    # 6. 其他 y/n → 默认 n
+    expect -re "\\[y/n\\]" { send "n\\r" }
+
+    # 兜底（防官方加新提示）
+    expect -re ".*" { send "\\r" }
+
+    expect eof
+END_EXPECT
+
+# 清理临时文件
+rm -f "$TEMP_SCRIPT" >/dev/null 2>&1
+
+# ======================== 设置固定账号 ========================
+echo "设置固定账号 $USERNAME / $PASSWORD ..."
+/usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" >/dev/null 2>&1 || true
+
+# ======================== 重启服务 ========================
+/usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
+
+echo -e "\n\033[32m安装完成！BBR 已开启\033[0m"
+echo -e "面板地址: \033[36mhttps://你的IP:$PORT\033[0m"
+echo -e "用户名: \033[36m$USERNAME\033[0m"
+echo -e "密码:   \033[36m$PASSWORD\033[0m"
+echo -e "\033[33m管理命令: x-ui\033[0m"
+echo -e "\033[31mIP证书仅6天有效，生产环境建议改域名证书\033[0m"
+echo -e "\033[32mBBR 加速已永久启用！可运行 sysctl net.ipv4.tcp_congestion_control 验证（应显示 bbr）\033[0m"
