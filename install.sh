@@ -33,7 +33,7 @@ TEMP_SCRIPT="/tmp/3x-ui.sh"
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 chmod +x "$TEMP_SCRIPT"
 
-# expect - 彻底跳过证书（故意 n + 兜底所有提示）
+# expect - 彻底跳过证书（故意 n + 超级兜底）
 expect <<END_EXPECT
     set timeout -1
 
@@ -46,7 +46,7 @@ expect <<END_EXPECT
     expect -re "(?i)Choose an option" { send "n\\r" }
 
     # 后续所有证书相关提示 - 全部回车或 n 跳过
-    expect -re "(?i)(Port to use|IPv6|domain|域名|enter|SSL|acme)" { send "\\r" }
+    expect -re "(?i)(Port to use|ACME|IPv6|domain|域名|enter|SSL|certificate)" { send "\\r" }
     expect -re "\\[y/n\\]" { send "n\\r" }
     expect -re ".*" { send "\\r" }  # 超级兜底
 
