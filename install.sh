@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + liang/liang + BBR）
-# 最终修复版 - expect 模式用单引号字符串 + heredoc 无引号 + 简化端口处理
+# 最终版 - 用 -exact 强制匹配 + 简化结构，绕过 Tcl [y/n] 解析坑
 
 PORT="2026"
 USERNAME="liang"
@@ -58,55 +58,24 @@ expect <<END_EXPECT
 
     spawn bash /tmp/3x-ui-install.sh
 
-    expect {
-        'Would you like to customize the Panel Port settings? (If not, a random port will be applied) [y/n]: ' { send "y\r" }
-        timeout { send_user "\nTIMEOUT: 未匹配到端口自定义 [y/n] 提示\n"; exit 1 }
-        eof     { send_user "\nEOF: install.sh 意外结束\n"; exit 1 }
-    }
+    expect -exact "Would you like to customize the Panel Port settings? (If not, a random port will be applied) [y/n]: " { send "y\r" }
+    expect -exact "Please set up the panel port: " { send "$PORT\r" }
 
-    expect {
-        'Please set up the panel port: ' { send "$PORT\r" }
-        timeout { send_user "\nTIMEOUT: 未匹配到端口输入提示\n"; exit 1 }
-    }
+    expect -exact "Choose an option (default 2 for IP): " { send "\r" }
+    expect -exact "Choose SSL certificate setup method:" { send "2\r" }
 
-    expect {
-        'Choose an option (default 2 for IP): ' { send "\r" }
-        'Choose SSL certificate setup method:' { send "2\r" }
-        timeout { send_user "\nTIMEOUT: 未匹配到 SSL 选项提示\n"; exit 1 }
-    }
+    expect -exact "Do you have an IPv6 address to include? (leave empty to skip): " { send "\r" }
 
-    expect {
-        'Do you have an IPv6 address to include? (leave empty to skip): ' { send "\r" }
-        timeout { send_user "\nNo IPv6 prompt, continue\n" }
-    }
+    expect -exact "Port to use for ACME HTTP-01 listener (default 80): " { send "80\r" }
+    expect -exact "Port * is in use." { send "81\r" }
+    expect -exact "Enter another port for acme.sh standalone listener (leave empty to abort): " { send "81\r" }
+    expect -exact "Port * is in use." { send "82\r" }
+    expect -exact "Port * is in use." { send "83\r" }
 
-    # ACME 端口 - 多次 expect 处理占用
-    expect {
-        'Port to use for ACME HTTP-01 listener (default 80): ' { send "80\r" }
-        'Port * is in use.' { send "81\r" }
-        'Enter another port for acme.sh standalone listener (leave empty to abort): ' { send "81\r" }
-        timeout { }
-    }
-    expect {
-        'Port * is in use.' { send "82\r" }
-        timeout { }
-    }
-    expect {
-        'Port * is in use.' { send "83\r" }
-        timeout { }
-    }
-
-    expect {
-        -re {\[y/n\]: } { send "n\r" }
-        -re {.*: } { send "\r" }
-        'Would you like to set this certificate for the panel? (y/n): ' { send "y\r" }
-        'Would you like to modify --reloadcmd for ACME? (y/n): ' { send "n\r" }
-        'installation finished' { }
-        'x-ui.*running now' { }
-        eof { }
-        timeout { send_user "\n最终超时，假设完成\n" }
-    }
-
+    expect -re "\\[y/n\\]: " { send "n\r" }
+    expect -re ".*: " { send "\r" }
+    expect -exact "Would you like to set this certificate for the panel? (y/n): " { send "y\r" }
+    expect -exact "Would you like to modify --reloadcmd for ACME? (y/n): " { send "n\r" }
     expect eof
 END_EXPECT
 
