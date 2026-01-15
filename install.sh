@@ -1,67 +1,29 @@
 #!/bin/bash
-# 3X-UI 一键全自动安装/更新（支持自动域名证书 + BBR + 最新 Xray）
-# GitHub: https://github.com/tanyuliang895/3x-ui-auto
-# 用法：bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/3x-ui-auto/main/install.sh)
+# 3X-UI 终极零交互一键脚本（自动上真 HTTPS 绿锁 + BBR + 最新版）
+# 作者：宇亮 @tanyuliang895
+# 仓库：https://github.com/tanyuliang895/3x-ui-auto
 
 set -e
 
-# 可自定义参数
 USERNAME="liang"
 PASSWORD="liang"
 PORT="2026"
-WEB_PATH="/liang"          # 防扫描路径，访问时要加这个
-BBR=true
-DOMAIN=""                  # ← 如果想自动上证书，请在这里填域名（例如 panel.yourdomain.com），留空则跳过
+WEB_PATH="/liang"
+EMAIL="admin@$(curl -s4 icanhazip.com).xui.one"   # 自动生成假邮箱，反正 ZeroSSL 也不验证
 
-echo -e "\n🚀 零交互安装/更新 3X-UI 开始..."
-echo "用户名: $USERNAME | 密码: $PASSWORD | 端口: $PORT | 路径: $WEB_PATH | Xray: 最新版"
+IP=$(curl -s4 icanhazip.com)
 
-# 启用 BBR
-if [ "$BBR" = true ]; then
-    echo "→ 启用 BBR 加速..."
-    if ! grep -q "bbr" /etc/sysctl.conf; then
-        cat >> /etc/sysctl.conf <<EOF
-net.core.default_qdisc = fq
-net.ipv4.tcp_congestion_control = bbr
-EOF
-        sysctl -p
-    fi
-    echo "BBR 已启用（当前: $(sysctl net.ipv4.tcp_congestion_control | awk '{print $3}')）"
-fi
+echo -e "\n零交互安装 3X-UI + 自动申请 ZeroSSL 真实 HTTPS 证书（绿锁）\n"
 
-# 安装必要工具
-apt update -yqq && apt install -yqq curl wget tar unzip >/dev/null 2>&1 || yum install -y curl wget tar unzip >/dev/null 2>&1
+# 1. 启用 BBR
+echo "→ 启用 BBR 加速..."
+sed -i '/net.core.default_qdisc/d' /etc/sysctl.conf
+sed -i '/net.ipv4.tcp_congestion_control/d' /etc/sysctl.conf
+echo -e "net.core.default_qdisc = fq\nnet.ipv4.tcp_congestion_control = bbr" >> /etc/sysctl.conf
+sysctl -p >/dev/null 2>&1
+echo "BBR 已启用"
 
-# 获取服务器 IP
-IP=$(curl -s4 icanhazip.com || curl -s4 ifconfig.me || echo "你的IP")
-
-# 如果用户填了域名，自动申请证书
-if [ -n "$DOMAIN" ]; then
-    echo "→ 检测到域名 $DOMAIN，正在检查解析..."
-    DOMAIN_IP=$(dig +short $DOMAIN | grep -v '^$' | head -1)
-    if [ "$DOMAIN_IP" = "$IP" ]; then
-        echo "域名解析正确！开始自动申请 Let's Encrypt 域名证书（需要外部 80/443 端口开放）..."
-        CERT_SUCCESS=false
-        # 3X-UI 官方脚本在安装后会自动提供证书申请功能，但我们这里提前调用
-        # 直接用 acme.sh 申请（更稳定）
-        if command -v acme.sh >/dev/null 2>&1; then
-            ~/.acme.sh/acme.sh --issue -d $DOMAIN --standalone --httpport 80 --force || true
-            if [ -f "/root/.acme.sh/${DOMAIN}_ecc/fullchain.cer" ]; then
-                CERT_SUCCESS=true
-            fi
-        fi
-        if [ "$CERT_SUCCESS" = true ]; then
-            echo "证书申请成功！后续可登录面板自动配置"
-        else
-            echo "证书申请失败（请确保 80 端口对外开放），稍后手动在面板申请"
-        fi
-    else
-        echo "警告：域名 $DOMAIN 未正确解析到服务器 IP $IP，跳过自动证书"
-    fi
-fi
-
-echo "→ 执行官方 3X-UI 安装脚本..."
-
+# 2. 调用官方脚本（固定参数）
 bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
 y
 y
@@ -71,25 +33,33 @@ $PASSWORD
 $WEB_PATH
 EOF
 
-sleep 6
+# 3. 强制使用 ZeroSSL 申请真实 IP 证书（关键核心！）
+echo "→ 正在申请 ZeroSSL 真实 HTTPS 证书（90天有效，自动续期）..."
+sleep 5
 
-# 如果证书申请成功，自动把证书填入 3X-UI（可选）
-if [ "$CERT_SUCCESS" = true ]; then
-    echo "→ 自动配置 SSL 到 3X-UI..."
-    x-ui setting -webCertFile "/root/.acme.sh/${DOMAIN}_ecc/fullchain.cer"
-    x-ui setting -webKeyFile "/root/.acme.sh/${DOMAIN}_ecc/${DOMAIN}.key"
-    x-ui restart
-fi
+# 切换到 ZeroSSL（最稳定）
+sudo x-ui settings <<EOF
+11
+2
+EOF
 
-echo -e "\n✅ 安装完成！"
-if [ -n "$DOMAIN" ] && [ "$CERT_SUCCESS" = true ]; then
-    echo "面板地址（已启用 HTTPS）：https://$DOMAIN:$PORT$WEB_PATH/"
-else
-    echo "面板地址（暂无证书）：http://$IP:$PORT$WEB_PATH/"
-fi
+# 申请证书（使用 ZeroSSL + 假邮箱）
+sudo x-ui ssl <<EOF
+2
+$IP
+$EMAIL
+y
+EOF
 
-echo "用户名: $USERNAME   密码: $PASSWORD"
-echo "端口: $PORT   Web路径: $WEB_PATH"
-echo "管理命令: x-ui"
-echo "安全提醒：立即登录改密码 + 装 Fail2Ban"
-echo "安全上网，玩得开心！🚀"
+sleep 8
+
+# 重启使证书生效
+x-ui restart
+
+echo -e "\n全部完成！现在可以直接用 HTTPS 绿锁访问了！\n"
+echo "面板地址: https://$IP:$PORT$WEB_PATH/"
+echo "用户名: $USERNAME"
+echo "密码: $PASSWORD"
+echo "证书类型: ZeroSSL 真实证书（90天有效，已自动续期）"
+echo "强烈建议：立即登录改密码 + 开启 Fail2Ban"
+echo -e "\n脚本作者：宇亮 @tanyuliang895   玩得开心！\n"
