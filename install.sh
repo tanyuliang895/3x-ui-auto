@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + liang/liang + BBR）
-# 稳定版 - 硬编码一切关键部分，精确匹配官方提示，处理端口占用
+# 修复 expect 语法错误 - 模式字符串用双引号保护，避免 Tcl 解析 [y/n] 作为命令
 
 PORT="2026"
 USERNAME="liang"
@@ -50,7 +50,7 @@ fi
 
 chmod +x "$TEMP_SCRIPT"
 
-# expect 自动化（完整替换块）
+# expect 自动化
 echo "开始自动化安装（expect 部分）... 请耐心等待日志输出"
 
 expect <<'END_EXPECT'
@@ -66,47 +66,42 @@ expect <<'END_EXPECT'
         eof     { send_user "\nEOF: install.sh 意外结束\n"; exit 1 }
     }
 
-    # 2. 输入端口 - 硬编码 2026
+    # 2. 输入端口
     expect {
         "Please set up the panel port: " { send "2026\r" }
         timeout { send_user "\nTIMEOUT: 未匹配到 'Please set up the panel port:'\n"; exit 1 }
     }
 
-    # 3. SSL 证书选择（默认回车选 IP 证书 option 2）
+    # 3. SSL 证书选择
     expect {
         "Choose an option (default 2 for IP): " { send "\r" }
         "Choose SSL certificate setup method:" { send "2\r" }
         timeout { send_user "\nTIMEOUT: 未匹配到 SSL 选项提示\n"; exit 1 }
     }
 
-    # 4. IPv6（如果出现，空回车跳过）
+    # 4. IPv6 跳过
     expect {
         "Do you have an IPv6 address to include? (leave empty to skip): " { send "\r" }
         timeout { send_user "\nNo IPv6 prompt, continue\n" }
     }
 
-    # 5. ACME 端口处理（循环尝试备用端口）
-    set tried 0
-    set alt_ports {81 82 83 84 8080 8000}
-    while {$tried < 6} {
-        expect {
-            "Port to use for ACME HTTP-01 listener (default 80): " { send "80\r" }
-            "Port * is in use." {
-                incr tried
-                set alt [lindex $alt_ports $tried]
-                send_user "\n端口占用，尝试 $alt\n"
-                send "$alt\r"
-            }
-            "Enter another port for acme.sh standalone listener (leave empty to abort): " {
-                incr tried
-                set alt [lindex $alt_ports $tried]
-                send "$alt\r"
-            }
-            timeout { send_user "\nACME 端口超时，跳过\n"; break }
-        }
+    # 5. ACME 端口处理（多次 expect 匹配占用情况）
+    expect {
+        "Port to use for ACME HTTP-01 listener (default 80): " { send "80\r" }
+        "Port * is in use." { send "81\r" }
+        "Enter another port for acme.sh standalone listener (leave empty to abort): " { send "81\r" }
+        timeout { }
+    }
+    expect {
+        "Port * is in use." { send "82\r" }
+        timeout { }
+    }
+    expect {
+        "Port * is in use." { send "83\r" }
+        timeout { }
     }
 
-    # 6. 兜底其他可能的 y/n 或 : 提示
+    # 6. 兜底其他提示
     expect {
         -re "\\[y/n\\]: " { send "n\r" }
         -re ".*: " { send "\r" }
@@ -123,7 +118,7 @@ END_EXPECT
 
 rm -f "$TEMP_SCRIPT" 2>/dev/null
 
-# 设置用户名密码（等待服务就绪）
+# 设置用户名密码
 echo "等待 x-ui 服务启动并设置账号..."
 for i in {1..40}; do
     if /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
@@ -135,12 +130,12 @@ for i in {1..40}; do
     sleep 3
 done
 
-# 重启面板
+# 重启
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
 
 echo -e "\n\033[32m安装完成！\033[0m"
-echo -e "面板地址: \033[36mhttps://你的服务器IP:$PORT\033[0m"
+echo -e "面板地址: \033[36mhttps://你的服务器IP:2026\033[0m"
 echo -e "用户名: \033[36m$USERNAME\033[0m   密码: \033[36m$PASSWORD\033[0m"
-echo -e "\033[33m管理命令: x-ui\033[0m (start/stop/restart/status/update 等)"
-echo -e "\033[31m注意: IP证书有效期仅约6天！生产环境强烈建议换域名+真实证书\033[0m"
-echo -e "\033[32mBBR 已永久启用，可运行 'sysctl net.ipv4.tcp_congestion_control' 验证（显示 bbr 即成功）\033[0m"
+echo -e "\033[33m管理命令: x-ui\033[0m"
+echo -e "\033[31mIP证书仅6天有效，建议换域名证书\033[0m"
+echo -e "\033[32mBBR 已启用\033[0m"
