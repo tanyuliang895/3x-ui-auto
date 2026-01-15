@@ -1,6 +1,7 @@
 #!/bin/bash
-# 3X-UI 零交互一键安装脚本（HTTP + BBR，无 HTTPS）
+# 3X-UI 一键安装 + HTTP（端口 2026） + BBR
 # 作者：优化版 by 宇亮
+# 特点：HTTP访问，无HTTPS，无503
 
 set -e
 
@@ -12,7 +13,7 @@ WEB_PATH="/liang"
 
 IP=$(curl -s4 icanhazip.com)
 
-echo -e "\n[+] 零交互安装 3X-UI + HTTP 访问\n"
+echo -e "\n[+] 开始零交互安装 3X-UI + HTTP访问\n"
 
 ### ===== 1. 启用 BBR =====
 echo "[+] 启用 BBR 加速..."
@@ -26,7 +27,6 @@ sysctl -p >/dev/null 2>&1
 echo "[+] BBR 已启用"
 
 ### ===== 2. 安装 3X-UI（官方脚本）=====
-
 echo "[+] 安装 3X-UI 面板..."
 bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh) <<EOF
 y
@@ -37,12 +37,28 @@ $PASSWORD
 $WEB_PATH
 EOF
 
-### ===== 3. 禁用 HTTPS =====
-echo "[+] 禁用 3X-UI HTTPS 模式（使用 HTTP）..."
+### ===== 3. 禁用 HTTPS，启用 HTTP =====
+echo "[+] 禁用 3X-UI HTTPS 模式，确保使用 HTTP..."
 x-ui setting -s https false
 x-ui restart
 
-### ===== 4. 完成信息 =====
+### ===== 4. 确认面板已监听端口 =====
+echo "[+] 检查 3X-UI 面板是否在端口 $PORT 监听..."
+sleep 2
+LISTEN=$(ss -tunlp | grep $PORT || true)
+if [[ -z "$LISTEN" ]]; then
+    echo "[!] 面板未监听端口 $PORT，尝试再次启动..."
+    x-ui restart
+    sleep 2
+    LISTEN=$(ss -tunlp | grep $PORT || true)
+    if [[ -z "$LISTEN" ]]; then
+        echo "[✖] 面板仍未启动，请检查日志：journalctl -u x-ui -n 50"
+        exit 1
+    fi
+fi
+echo "[+] 面板正常启动，端口 $PORT 已就绪"
+
+### ===== 5. 完成信息 =====
 echo -e "\n================ 安装完成 ================\n"
 echo "面板地址: http://$IP:$PORT$WEB_PATH/"
 echo "用户名: $USERNAME"
