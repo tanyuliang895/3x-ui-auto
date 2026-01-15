@@ -1,5 +1,5 @@
 #!/bin/bash
-# 3X-UI 零交互安装 + 设置端口 2026 + 用户名 liang + BBR
+# 3X-UI 完全自动化安装脚本（端口:2026, 用户名:liang, 密码:liang, BBR, 防火墙, 开机自启）
 
 set -e
 
@@ -19,7 +19,7 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
-# 安装 curl
+# 安装依赖 curl
 if ! command -v curl >/dev/null 2>&1; then
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update && apt-get install -y curl
@@ -31,11 +31,11 @@ if ! command -v curl >/dev/null 2>&1; then
   fi
 fi
 
-# ===== 安装 3X-UI（跳过端口自定义交互） =====
-echo "安装面板（选择不自定义端口）"
+# 安装 3X-UI（自动选择不自定义端口）
+echo "安装面板（跳过端口自定义交互）"
 yes n | bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
 
-# ===== 修改端口和账号 =====
+# 配置端口和账号
 echo "配置面板账号和端口"
 x-ui setting <<EOF
 $PORT
@@ -45,14 +45,27 @@ EOF
 
 x-ui restart
 
-# ===== 开启 BBR =====
+# 放行防火墙端口（适配 ufw / firewalld / iptables）
+if command -v ufw >/dev/null 2>&1; then
+  ufw allow $PORT/tcp
+elif command -v firewall-cmd >/dev/null 2>&1; then
+  firewall-cmd --permanent --add-port=$PORT/tcp
+  firewall-cmd --reload
+else
+  iptables -I INPUT -p tcp --dport $PORT -j ACCEPT
+fi
+
+# 开启 BBR
 if ! sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
   echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
   sysctl -p >/dev/null 2>&1
 fi
 
-# 输出信息
+# 开机自启 3X-UI
+systemctl enable x-ui
+
+# 输出访问信息
 IP=$(curl -4s icanhazip.com || echo "服务器IP")
 echo "======================================="
 echo "✅ 安装完成"
