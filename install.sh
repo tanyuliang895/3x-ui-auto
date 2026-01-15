@@ -1,12 +1,12 @@
 #!/bin/bash
-# 3X-UI 全自动安装脚本（2026-01-15 最终稳定版：不 patch，只 expect 自动化 + 补服务 + BBR）
-# 端口: 2026 | 用户: liang | 密码: liang | 自动处理 SSL 选择 IP 证书
+# 3X-UI 全自动安装脚本（2026-01-15 终极可靠版：expect 自动化 + 补服务 + BBR）
+# 端口: 2026 | 用户: liang | 密码: liang | 自动选 IP 证书
 
 set -e
 
-export PORT="2026"
-export USERNAME="liang"
-export PASSWORD="liang"
+PORT="2026"
+USERNAME="liang"
+PASSWORD="liang"
 
 echo -e "\033[36m========================================\033[0m"
 echo -e "   3X-UI 全自动安装 (端口: \033[32m$PORT\033[0m | 用户/密码: $USERNAME/$PASSWORD)"
@@ -16,7 +16,7 @@ echo -e "\033[36m========================================\033[0m\n"
 [ "$(id -u)" != "0" ] && { echo -e "\033[31m必须 root 执行！\033[0m"; exit 1; }
 
 # 依赖
-echo "安装依赖..."
+echo "安装依赖 curl expect socat ca-certificates..."
 apt update -y && apt install -y curl expect socat ca-certificates >/dev/null 2>&1 || true
 
 # BBR
@@ -30,7 +30,7 @@ sysctl -p >/dev/null 2>&1
 echo -e "\033[32mBBR 已启用！\033[0m"
 
 # 开放端口
-echo "开放 80-83 端口（证书验证） + $PORT..."
+echo "开放 80-83 (证书) + $PORT..."
 ufw allow 80:83/tcp >/dev/null 2>&1 || true
 ufw allow "$PORT"/tcp >/dev/null 2>&1 || true
 iptables -I INPUT -p tcp --dport 80:83 -j ACCEPT >/dev/null 2>&1 || true
@@ -42,7 +42,7 @@ curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o "
 chmod +x "$TEMP_SCRIPT"
 
 # expect 自动化（宽松匹配所有提示）
-echo -e "\n\033[33m自动化执行官方安装...\033[0m"
+echo -e "\n\033[33m自动化执行官方安装（选 IP 证书）...\033[0m"
 
 expect <<EOF
 set timeout 900
@@ -51,7 +51,7 @@ log_user 1
 spawn bash "$TEMP_SCRIPT"
 
 expect {
-    -re {Would you like to customize.*\[y/n\]:} { send "y\r" }
+    -re {Would you like to customize the Panel Port settings.*\[y/n\]:} { send "y\r" }
     timeout { send_user "未匹配端口自定义\n" }
 }
 
@@ -63,19 +63,20 @@ expect {
 expect {
     -re {Choose SSL certificate setup method:.*} { send "2\r" }
     -re {Choose an option.*default 2.*} { send "2\r" }
-    timeout { send_user "未匹配 SSL 选项，继续尝试\n" }
+    timeout { send_user "未匹配 SSL 选项，继续\n" }
 }
 
 expect {
-    -re {Do you have an IPv6.*leave empty.*:} { send "\r" }
+    -re {Do you have an IPv6 address to include.*leave empty to skip.*:} { send "\r" }
     timeout { send_user "无IPv6，继续\n" }
 }
 
 set ports {80 81 82 83}
 foreach p \$ports {
     expect {
-        -re {Port to use for ACME.*default 80.*:} { send "\$p\r" }
-        -re {Port.*is in use.*} { send "\$p\r" }
+        -re {Port to use for ACME HTTP-01 listener.*default 80.*:} { send "\$p\r" }
+        -re {Port.*is in use.*Enter another port.*:} { send "\$p\r" }
+        -re {Port.*is in use.*} { continue }
         timeout { send_user "无端口提示，继续\n"; break }
     }
 }
@@ -92,7 +93,7 @@ expect eof
 EOF
 
 # 补齐服务文件（防止缺失）
-echo "补齐服务文件..."
+echo "补齐并启动服务..."
 cat > /etc/systemd/system/x-ui.service <<EOF
 [Unit]
 Description=x-ui Service
@@ -121,12 +122,11 @@ sleep 15
 
 IP=$(curl -s4 icanhazip.com || echo "你的IP")
 echo -e "\n\033[32m安装完成！\033[0m"
-echo -e "访问: http://$IP:$PORT （如果证书失败，用 HTTP 方式）"
+echo -e "访问: http://$IP:$PORT （如果证书失败，用 HTTP）"
 echo -e "用户名: $USERNAME"
 echo -e "密码: $PASSWORD"
 echo ""
 echo "提示："
-echo "  • 如果出现证书失败，面板仍可用 HTTP 访问"
-echo "  • 登录后改面板路径（webBasePath）"
-echo "  • 检查: systemctl status x-ui"
+echo "  • 登录后立即改面板路径 (webBasePath) 防扫描"
+echo "  • 检查状态: systemctl status x-ui"
 echo "  • 卸载: /usr/local/x-ui/x-ui uninstall"
