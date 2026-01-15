@@ -1,12 +1,12 @@
 #!/bin/bash
-# 3X-UI 全自动安装脚本（修复变量展开问题 + 强制 IP SSL + BBR）
+# 3X-UI 全自动安装脚本（2026-01-15 终极无坑版：强制变量展开 + 修复 spawn + IP SSL + BBR）
 # 端口: 2026 | 用户: liang | 密码: liang
 
 set -e
 
-PORT="2026"
-USERNAME="liang"
-PASSWORD="liang"
+export PORT="2026"
+export USERNAME="liang"
+export PASSWORD="liang"
 
 echo -e "\033[36m========================================\033[0m"
 echo -e "   3X-UI 全自动安装 (端口: \033[32m$PORT\033[0m | 用户/密码: $USERNAME/$PASSWORD)"
@@ -16,7 +16,7 @@ echo -e "\033[36m========================================\033[0m\n"
 [ "$(id -u)" != "0" ] && { echo -e "\033[31m必须 root 执行！\033[0m"; exit 1; }
 
 # 依赖
-echo "安装依赖 curl expect socat ca-certificates..."
+echo "安装依赖..."
 apt update -y && apt install -y curl expect socat ca-certificates >/dev/null 2>&1 || true
 
 # BBR
@@ -29,12 +29,12 @@ EOF
 sysctl -p >/dev/null 2>&1
 echo -e "\033[32mBBR 已启用！\033[0m"
 
-# 开放端口
+# 端口开放
 echo "开放 80-83 端口..."
 ufw allow 80:83/tcp >/dev/null 2>&1 || true
 iptables -I INPUT -p tcp --dport 80:83 -j ACCEPT >/dev/null 2>&1 || true
 
-# 下载官方脚本
+# 下载官方脚本到临时文件
 TEMP_SCRIPT="/tmp/3x-ui-install.sh"
 echo "下载官方脚本到 $TEMP_SCRIPT..."
 curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
@@ -46,10 +46,10 @@ fi
 
 chmod +x "$TEMP_SCRIPT"
 
-# expect（无单引号 heredoc，允许变量展开）
+# expect（用 <<EOF + export 变量，确保展开）
 echo -e "\n\033[33m开始自动化安装...\033[0m"
 
-expect <<END_EXPECT
+expect <<EOF
 set timeout 900
 log_user 1
 
@@ -57,12 +57,12 @@ spawn bash "$TEMP_SCRIPT"
 
 expect {
     -re {Would you like to customize.*\[y/n\]:} { send "y\r" }
-    timeout { send_user "未匹配端口自定义\n"; exit 1 }
+    timeout { send_user "未匹配端口自定义提示\n"; exit 1 }
 }
 
 expect {
     -re {Please set up the panel port:.*} { send "$PORT\r" }
-    timeout { send_user "未匹配端口输入\n"; exit 1 }
+    timeout { send_user "未匹配端口输入提示\n"; exit 1 }
 }
 
 expect {
@@ -76,12 +76,11 @@ expect {
     timeout { send_user "无IPv6，继续\n" }
 }
 
-# 端口冲突处理
 set ports {80 81 82 83}
-foreach p $ports {
+foreach p \$ports {
     expect {
-        -re {Port to use for ACME.*default 80.*:} { send "$p\r" }
-        -re {Port.*is in use.*} { send "$p\r" }
+        -re {Port to use for ACME.*default 80.*:} { send "\$p\r" }
+        -re {Port.*is in use.*} { send "\$p\r" }
         timeout { send_user "无端口提示，继续\n"; break }
     }
 }
@@ -95,15 +94,15 @@ expect {
 }
 
 expect eof
-END_EXPECT
+EOF
 
 rm -f "$TEMP_SCRIPT" 2>/dev/null
 
-# 设置账号
+# 强制设置账号
 echo -e "\n\033[33m等待设置账号...\033[0m"
 sleep 20
 for i in {1..30}; do
-    if /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
+    if [ -x /usr/local/x-ui/x-ui ] && /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
         /usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" -port "$PORT" >/dev/null 2>&1
         echo -e "\033[32m账号设置完成！\033[0m"
         break
@@ -119,4 +118,4 @@ echo -e "访问: https://$IP:$PORT"
 echo -e "用户名: $USERNAME"
 echo -e "密码: $PASSWORD"
 echo ""
-echo "提示：确保公网80端口开放。登录后改面板路径。"
+echo "提示：确保公网80端口开放。登录后改路径防扫描。"
