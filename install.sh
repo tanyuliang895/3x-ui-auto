@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + liang/liang + BBR）
-# 最终修复 - expect heredoc 改双引号 + 模式字符串双引号保护 + 避免 Tcl [] 命令替换
+# 最终修复版 - expect 模式用单引号字符串 + heredoc 无引号 + 简化端口处理
 
 PORT="2026"
 USERNAME="liang"
@@ -50,7 +50,6 @@ fi
 
 chmod +x "$TEMP_SCRIPT"
 
-# expect 自动化 - heredoc 改双引号 + 模式字符串双引号保护
 echo "开始自动化安装（expect 部分）... 请耐心等待日志输出"
 
 expect <<END_EXPECT
@@ -59,58 +58,53 @@ expect <<END_EXPECT
 
     spawn bash /tmp/3x-ui-install.sh
 
-    # 1. 自定义端口 [y/n]
     expect {
-        "Would you like to customize the Panel Port settings? (If not, a random port will be applied) [y/n]: " { send "y\\r" }
-        timeout { send_user "\\nTIMEOUT: 未匹配到端口自定义 [y/n] 提示\\n"; exit 1 }
-        eof     { send_user "\\nEOF: install.sh 意外结束\\n"; exit 1 }
+        'Would you like to customize the Panel Port settings? (If not, a random port will be applied) [y/n]: ' { send "y\r" }
+        timeout { send_user "\nTIMEOUT: 未匹配到端口自定义 [y/n] 提示\n"; exit 1 }
+        eof     { send_user "\nEOF: install.sh 意外结束\n"; exit 1 }
     }
 
-    # 2. 输入端口
     expect {
-        "Please set up the panel port: " { send "$PORT\\r" }
-        timeout { send_user "\\nTIMEOUT: 未匹配到端口输入提示\\n"; exit 1 }
+        'Please set up the panel port: ' { send "$PORT\r" }
+        timeout { send_user "\nTIMEOUT: 未匹配到端口输入提示\n"; exit 1 }
     }
 
-    # 3. SSL 证书选择
     expect {
-        "Choose an option (default 2 for IP): " { send "\\r" }
-        "Choose SSL certificate setup method:" { send "2\\r" }
-        timeout { send_user "\\nTIMEOUT: 未匹配到 SSL 选项提示\\n"; exit 1 }
+        'Choose an option (default 2 for IP): ' { send "\r" }
+        'Choose SSL certificate setup method:' { send "2\r" }
+        timeout { send_user "\nTIMEOUT: 未匹配到 SSL 选项提示\n"; exit 1 }
     }
 
-    # 4. IPv6 跳过
     expect {
-        "Do you have an IPv6 address to include? (leave empty to skip): " { send "\\r" }
-        timeout { send_user "\\nNo IPv6 prompt, continue\\n" }
+        'Do you have an IPv6 address to include? (leave empty to skip): ' { send "\r" }
+        timeout { send_user "\nNo IPv6 prompt, continue\n" }
     }
 
-    # 5. ACME 端口处理（多次匹配）
+    # ACME 端口 - 多次 expect 处理占用
     expect {
-        "Port to use for ACME HTTP-01 listener (default 80): " { send "80\\r" }
-        "Port * is in use." { send "81\\r" }
-        "Enter another port for acme.sh standalone listener (leave empty to abort): " { send "81\\r" }
+        'Port to use for ACME HTTP-01 listener (default 80): ' { send "80\r" }
+        'Port * is in use.' { send "81\r" }
+        'Enter another port for acme.sh standalone listener (leave empty to abort): ' { send "81\r" }
         timeout { }
     }
     expect {
-        "Port * is in use." { send "82\\r" }
+        'Port * is in use.' { send "82\r" }
         timeout { }
     }
     expect {
-        "Port * is in use." { send "83\\r" }
+        'Port * is in use.' { send "83\r" }
         timeout { }
     }
 
-    # 6. 兜底
     expect {
-        -re "\\[y/n\\]: " { send "n\\r" }
-        -re ".*: " { send "\\r" }
-        "Would you like to set this certificate for the panel? (y/n): " { send "y\\r" }
-        "Would you like to modify --reloadcmd for ACME? (y/n): " { send "n\\r" }
-        "installation finished" { }
-        "x-ui.*running now" { }
+        -re {\[y/n\]: } { send "n\r" }
+        -re {.*: } { send "\r" }
+        'Would you like to set this certificate for the panel? (y/n): ' { send "y\r" }
+        'Would you like to modify --reloadcmd for ACME? (y/n): ' { send "n\r" }
+        'installation finished' { }
+        'x-ui.*running now' { }
         eof { }
-        timeout { send_user "\\n最终超时，假设完成\\n" }
+        timeout { send_user "\n最终超时，假设完成\n" }
     }
 
     expect eof
@@ -118,7 +112,6 @@ END_EXPECT
 
 rm -f "$TEMP_SCRIPT" 2>/dev/null
 
-# 设置用户名密码
 echo "等待 x-ui 服务启动并设置账号..."
 for i in {1..40}; do
     if /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
@@ -130,12 +123,11 @@ for i in {1..40}; do
     sleep 3
 done
 
-# 重启
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
 
-echo -e "\\n\\033[32m安装完成！\\033[0m"
-echo -e "面板地址: \\033[36mhttps://你的服务器IP:$PORT\\033[0m"
-echo -e "用户名: \\033[36m$USERNAME\\033[0m   密码: \\033[36m$PASSWORD\\033[0m"
-echo -e "\\033[33m管理命令: x-ui\\033[0m"
-echo -e "\\033[31mIP证书仅6天有效，建议换域名证书\\033[0m"
-echo -e "\\033[32mBBR 已启用\\033[0m"
+echo -e "\n\033[32m安装完成！\033[0m"
+echo -e "面板地址: \033[36mhttps://你的服务器IP:$PORT\033[0m"
+echo -e "用户名: \033[36m$USERNAME\033[0m   密码: \033[36m$PASSWORD\033[0m"
+echo -e "\033[33m管理命令: x-ui\033[0m"
+echo -e "\033[31mIP证书仅6天有效，建议换域名证书\033[0m"
+echo -e "\033[32mBBR 已启用\033[0m"
