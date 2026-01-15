@@ -23,16 +23,16 @@ if [ "$(id -u)" != "0" ]; then
 fi
 
 # 安装必要依赖
-if ! command -v curl &> /dev/null || ! command -v socat &> /dev/null; then
-    echo "安装必要依赖 (curl socat ca-certificates)..."
+if ! command -v curl &> /dev/null || ! command -v socat &> /dev/null || ! command -v wget &> /dev/null; then
+    echo "安装必要依赖 (curl wget socat ca-certificates)..."
     if command -v apt-get &> /dev/null; then
-        apt-get update -y && apt-get install -y curl socat ca-certificates
+        apt-get update -y && apt-get install -y curl wget socat ca-certificates
     elif command -v yum &> /dev/null; then
-        yum install -y curl socat ca-certificates
+        yum install -y curl wget socat ca-certificates
     elif command -v dnf &> /dev/null; then
-        dnf install -y curl socat ca-certificates
+        dnf install -y curl wget socat ca-certificates
     else
-        echo -e "\033[31m不支持的系统，请手动安装 curl socat 后重试。\033[0m"
+        echo -e "\033[31m不支持的系统，请手动安装 curl wget socat 后重试。\033[0m"
         exit 1
     fi
 fi
@@ -47,48 +47,81 @@ EOF
 sysctl -p >/dev/null 2>&1
 echo -e "\033[32mBBR 已启用！\033[0m"
 
-# 执行官方最新安装脚本（master 分支自动获取最新版）
-echo -e "\n\033[33m开始执行 3X-UI 官方安装（自动选择自定义端口并设置为 $DEFAULT_PORT）...\033[0m"
+# 获取最新版本号（使用 GitHub API，避免缓存问题）
+LATEST_VERSION=$(curl -Ls "https://api.github.com/repos/MHSanaei/3x-ui/releases/latest" | grep '"tag_name":' | sed -E 's/.*"([^"]+)".*/\1/')
 
-# 使用 expect 实现自动化交互（需先安装 expect）
-if ! command -v expect &> /dev/null; then
-    echo "安装 expect 以实现自动交互..."
-    if command -v apt-get &> /dev/null; then
-        apt-get install -y expect
-    elif command -v yum &> /dev/null; then
-        yum install -y expect
-    elif command -v dnf &> /dev/null; then
-        dnf install -y expect
-    else
-        echo -e "\033[31m无法自动安装 expect，请手动安装后重试。\033[0m"
-        exit 1
-    fi
+if [[ -z "$LATEST_VERSION" ]]; then
+    echo -e "\033[31m[✗] 无法获取最新版本，请检查网络或 GitHub API 限制\033[0m"
+    exit 1
 fi
 
-# 使用 expect 自动化回答 y + 输入端口（后续用户名密码官方会随机生成，我们安装后再改）
-expect <<EOF
-spawn bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
-expect {
-    "Would you like to customize the Panel Port settings?*" {
-        send "y\r"
-        exp_continue
-    }
-    "Please set up the panel port:*" {
-        send "$DEFAULT_PORT\r"
-        exp_continue
-    }
-    eof
-}
+echo -e "\033[32m[✓] 检测到最新版本: $LATEST_VERSION\033[0m"
+
+# 架构检测
+ARCH=$(uname -m)
+case $ARCH in
+    x86_64|x64|amd64) DOWNLOAD_ARCH="amd64" ;;
+    armv8|arm64|aarch64) DOWNLOAD_ARCH="arm64" ;;
+    s390x) DOWNLOAD_ARCH="s390x" ;;
+    *) echo -e "\033[31m[✗] 不支持的架构: $ARCH，使用 amd64 作为默认\033[0m" && DOWNLOAD_ARCH="amd64" ;;
+esac
+
+DOWNLOAD_URL="https://github.com/MHSanaei/3x-ui/releases/download/${LATEST_VERSION}/x-ui-linux-${DOWNLOAD_ARCH}.tar.gz"
+
+echo -e "\033[32m[✓] 下载地址: $DOWNLOAD_URL\033[0m"
+
+# 下载文件
+cd /tmp
+wget -N --no-check-certificate -O "x-ui-linux-${DOWNLOAD_ARCH}.tar.gz" "$DOWNLOAD_URL"
+
+# 检查文件大小（应大于10MB）
+FILE_SIZE=$(stat -c%s "x-ui-linux-${DOWNLOAD_ARCH}.tar.gz" 2>/dev/null || stat -f%z "x-ui-linux-${DOWNLOAD_ARCH}.tar.gz" 2>/dev/null)
+if [[ -z "$FILE_SIZE" || "$FILE_SIZE" -lt 10000000 ]]; then
+    echo -e "\033[31m[✗] 下载失败或文件损坏 (大小: ${FILE_SIZE:-未知} 字节)，请检查网络或尝试使用代理\033[0m"
+    rm -f "x-ui-linux-${DOWNLOAD_ARCH}.tar.gz"
+    exit 1
+fi
+
+# 安装 3X-UI（参考官方逻辑）
+echo -e "\n\033[33m开始安装 3X-UI...\033[0m"
+
+# 解压到 /usr/local/
+mkdir -p /usr/local/x-ui/
+tar -zxvf "x-ui-linux-${DOWNLOAD_ARCH}.tar.gz" -C /usr/local/x-ui/
+rm -f "x-ui-linux-${DOWNLOAD_ARCH}.tar.gz"
+
+cd /usr/local/x-ui/
+
+# 权限
+chmod +x x-ui bin/xray-linux-* x-ui.sh
+
+# 设置 service（systemd）
+cat > /etc/systemd/system/x-ui.service << EOF
+[Unit]
+Description=x-ui
+After=network.target
+
+[Service]
+WorkingDirectory=/usr/local/x-ui/
+ExecStart=/usr/local/x-ui/x-ui
+Restart=on-failure
+RestartPreventExitStatus=23
+LimitNPROC=10000
+LimitNOFILE=1000000
+
+[Install]
+WantedBy=multi-user.target
 EOF
 
-# 等待安装完成（官方脚本会自动生成随机用户名密码）
-sleep 5
+systemctl daemon-reload
+systemctl enable x-ui
+systemctl start x-ui
 
-# 安装完成后立即修改为我们想要的用户名和密码 + 端口（万一官方随机了端口也强制改回）
-echo -e "\n\033[33m安装完成，正在设置用户名/密码/端口...\033[0m"
+# 设置用户名、密码、端口
+echo -e "\033[33m设置用户名/密码/端口...\033[0m"
 /usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" -port "$DEFAULT_PORT" >/dev/null 2>&1
 
-# 重启服务确保生效
+# 重启服务
 /usr/local/x-ui/x-ui restart
 
 # 输出最终信息
@@ -101,4 +134,5 @@ echo -e "\n提示："
 echo "  • 建议安装后立即登录面板修改路径（webBasePath）提高安全性"
 echo "  • 可在面板内或运行 'x-ui' 命令手动申请 SSL 证书"
 echo "  • BBR 加速已开启，如需检查：sysctl net.ipv4.tcp_congestion_control"
+echo "  • 如需卸载：/usr/local/x-ui/x-ui uninstall"
 echo ""
