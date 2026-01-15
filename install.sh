@@ -1,11 +1,8 @@
 #!/bin/bash
-# 3X-UI 一键安装脚本（零交互 + 用户名: liang, 密码: liang, 端口: 2026 + BBR加速）
-# 用法：
-# bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/3x-ui-auto/main/install.sh)
+# 3X-UI 零交互安装 + 设置端口 2026 + 用户名 liang + BBR
 
 set -e
 
-# ====== 固定参数 ======
 USERNAME="liang"
 PASSWORD="liang"
 PORT="2026"
@@ -16,33 +13,30 @@ echo "  用户名: $USERNAME"
 echo "  端口:   $PORT"
 echo "======================================="
 
-# ====== 必须是 root ======
+# 必须 root
 if [ "$EUID" -ne 0 ]; then
-  echo "❌ 请使用 root 用户运行该脚本"
+  echo "请使用 root 用户运行"
   exit 1
 fi
 
-# ====== 安装 curl ======
+# 安装 curl
 if ! command -v curl >/dev/null 2>&1; then
-  echo "安装 curl..."
   if command -v apt-get >/dev/null 2>&1; then
     apt-get update && apt-get install -y curl
   elif command -v yum >/dev/null 2>&1; then
     yum install -y curl
   else
-    echo "❌ 不支持的系统，请手动安装 curl"
+    echo "请手动安装 curl"
     exit 1
   fi
 fi
 
-# ====== 安装 3X-UI（零交互） ======
-echo "开始安装 3X-UI..."
-bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh) <<EOF
-n
-EOF
+# ===== 安装 3X-UI（跳过端口自定义交互） =====
+echo "安装面板（选择不自定义端口）"
+yes n | bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
 
-# ====== 配置面板账号与端口 ======
-echo "配置面板账号与端口..."
+# ===== 修改端口和账号 =====
+echo "配置面板账号和端口"
 x-ui setting <<EOF
 $PORT
 $USERNAME
@@ -51,35 +45,18 @@ EOF
 
 x-ui restart
 
-# ====== 开启 BBR 加速 ======
-echo "检测并开启 BBR..."
-
-enable_bbr() {
-  if sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
-    echo "BBR 已开启，跳过"
-    return
-  fi
-
+# ===== 开启 BBR =====
+if ! sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
   echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
   echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
-
   sysctl -p >/dev/null 2>&1
+fi
 
-  if sysctl net.ipv4.tcp_congestion_control | grep -q bbr; then
-    echo "✅ BBR 启用成功"
-  else
-    echo "⚠️ BBR 启用失败（可能是内核不支持）"
-  fi
-}
-
-enable_bbr
-
-# ====== 输出访问信息 ======
-IP=$(curl -4s icanhazip.com || echo "你的服务器IP")
-
+# 输出信息
+IP=$(curl -4s icanhazip.com || echo "服务器IP")
 echo "======================================="
 echo "✅ 安装完成"
 echo "访问地址: http://$IP:$PORT"
-echo "用户名:   $USERNAME"
-echo "密码:     $PASSWORD"
+echo "用户名: $USERNAME"
+echo "密码: $PASSWORD"
 echo "======================================="
