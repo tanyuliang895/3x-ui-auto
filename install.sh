@@ -1,7 +1,7 @@
 #!/bin/bash
 # 3X-UI 一键安装 + HTTP（端口 2026） + BBR
 # 作者：优化版 by 宇亮
-# 特点：HTTP访问，无HTTPS，无503
+# 特点：HTTP访问，端口2026，无HTTPS，无503，自动检查端口
 
 set -e
 
@@ -37,28 +37,40 @@ $PASSWORD
 $WEB_PATH
 EOF
 
-### ===== 3. 禁用 HTTPS，启用 HTTP =====
-echo "[+] 禁用 3X-UI HTTPS 模式，确保使用 HTTP..."
+### ===== 3. 强制禁用 HTTPS & 指定端口 =====
+echo "[+] 强制禁用 HTTPS，确保 HTTP 模式..."
 x-ui setting -s https false
-x-ui restart
+x-ui setting -s port $PORT
 
-### ===== 4. 确认面板已监听端口 =====
-echo "[+] 检查 3X-UI 面板是否在端口 $PORT 监听..."
-sleep 2
-LISTEN=$(ss -tunlp | grep $PORT || true)
+echo "[+] 重启 3X-UI 面板..."
+x-ui restart
+sleep 3
+
+### ===== 4. 检查端口监听 =====
+echo "[+] 检查面板是否在端口 $PORT 监听..."
+LISTEN=$(ss -tunlp | grep ":$PORT" || true)
 if [[ -z "$LISTEN" ]]; then
-    echo "[!] 面板未监听端口 $PORT，尝试再次启动..."
-    x-ui restart
+    echo "[!] 端口 $PORT 未监听，可能被占用，尝试杀掉旧进程并重启..."
+    pkill -f x-ui || true
     sleep 2
-    LISTEN=$(ss -tunlp | grep $PORT || true)
+    x-ui restart
+    sleep 3
+    LISTEN=$(ss -tunlp | grep ":$PORT" || true)
     if [[ -z "$LISTEN" ]]; then
-        echo "[✖] 面板仍未启动，请检查日志：journalctl -u x-ui -n 50"
+        echo "[✖] 面板仍未启动，请查看日志：journalctl -u x-ui -n 50"
         exit 1
     fi
 fi
-echo "[+] 面板正常启动，端口 $PORT 已就绪"
+echo "[+] 面板已在端口 $PORT 正常监听"
 
-### ===== 5. 完成信息 =====
+### ===== 5. 防火墙检测 =====
+echo "[+] 检查防火墙是否允许 $PORT 端口..."
+if command -v ufw >/dev/null 2>&1; then
+    ufw allow $PORT/tcp >/dev/null 2>&1 || true
+    echo "[+] 防火墙已放行端口 $PORT"
+fi
+
+### ===== 6. 完成信息 =====
 echo -e "\n================ 安装完成 ================\n"
 echo "面板地址: http://$IP:$PORT$WEB_PATH/"
 echo "用户名: $USERNAME"
