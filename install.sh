@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + liang/liang + BBR）
-# 修复版 - 硬编码路径/端口，去除 env 依赖，移除引起 no such variable 的 debug
+# 稳定版 - 硬编码一切关键部分，精确匹配官方提示，处理端口占用
 
 PORT="2026"
 USERNAME="liang"
@@ -39,7 +39,7 @@ ufw reload >/dev/null 2>&1 || true
 firewall-cmd --add-port=80/tcp --permanent >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 || true
 iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true
 
-# 下载官方脚本
+# 下载官方 install.sh
 TEMP_SCRIPT="/tmp/3x-ui-install.sh"
 curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 
@@ -50,10 +50,7 @@ fi
 
 chmod +x "$TEMP_SCRIPT"
 
-echo "TEMP_SCRIPT path: $TEMP_SCRIPT"
-ls -l "$TEMP_SCRIPT" || echo "文件不存在！"
-
-# expect 自动化 - 硬编码路径/端口，移除 env 引用
+# expect 自动化（完整替换块）
 echo "开始自动化安装（expect 部分）... 请耐心等待日志输出"
 
 expect <<'END_EXPECT'
@@ -75,20 +72,20 @@ expect <<'END_EXPECT'
         timeout { send_user "\nTIMEOUT: 未匹配到 'Please set up the panel port:'\n"; exit 1 }
     }
 
-    # 3. SSL 证书选择
+    # 3. SSL 证书选择（默认回车选 IP 证书 option 2）
     expect {
         "Choose an option (default 2 for IP): " { send "\r" }
         "Choose SSL certificate setup method:" { send "2\r" }
         timeout { send_user "\nTIMEOUT: 未匹配到 SSL 选项提示\n"; exit 1 }
     }
 
-    # 4. IPv6 跳过
+    # 4. IPv6（如果出现，空回车跳过）
     expect {
         "Do you have an IPv6 address to include? (leave empty to skip): " { send "\r" }
         timeout { send_user "\nNo IPv6 prompt, continue\n" }
     }
 
-    # 5. ACME 端口处理（循环尝试备用）
+    # 5. ACME 端口处理（循环尝试备用端口）
     set tried 0
     set alt_ports {81 82 83 84 8080 8000}
     while {$tried < 6} {
@@ -109,7 +106,7 @@ expect <<'END_EXPECT'
         }
     }
 
-    # 6. 兜底其他提示
+    # 6. 兜底其他可能的 y/n 或 : 提示
     expect {
         -re "\\[y/n\\]: " { send "n\r" }
         -re ".*: " { send "\r" }
@@ -126,7 +123,7 @@ END_EXPECT
 
 rm -f "$TEMP_SCRIPT" 2>/dev/null
 
-# 设置用户名密码
+# 设置用户名密码（等待服务就绪）
 echo "等待 x-ui 服务启动并设置账号..."
 for i in {1..40}; do
     if /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
@@ -138,12 +135,12 @@ for i in {1..40}; do
     sleep 3
 done
 
-# 重启
+# 重启面板
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
 
 echo -e "\n\033[32m安装完成！\033[0m"
-echo -e "面板: https://你的IP:2026"
-echo -e "用户: $USERNAME   密码: $PASSWORD"
-echo -e "\033[33m命令: x-ui\033[0m"
-echo -e "\033[31mIP证书6天有效，建议换域名\033[0m"
-echo -e "\033[32mBBR 启用，验证: sysctl net.ipv4.tcp_congestion_control\033[0m"
+echo -e "面板地址: \033[36mhttps://你的服务器IP:$PORT\033[0m"
+echo -e "用户名: \033[36m$USERNAME\033[0m   密码: \033[36m$PASSWORD\033[0m"
+echo -e "\033[33m管理命令: x-ui\033[0m (start/stop/restart/status/update 等)"
+echo -e "\033[31m注意: IP证书有效期仅约6天！生产环境强烈建议换域名+真实证书\033[0m"
+echo -e "\033[32mBBR 已永久启用，可运行 'sysctl net.ipv4.tcp_congestion_control' 验证（显示 bbr 即成功）\033[0m"
