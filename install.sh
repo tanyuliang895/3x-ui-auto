@@ -1,6 +1,6 @@
 #!/bin/bash
-# 3X-UI 全自动安装脚本（2026-01-15 完美版：精确匹配最新 SSL 提示 + 端口冲突循环 + BBR）
-# 端口: 2026 | 用户: liang | 密码: liang
+# 3X-UI 全自动安装脚本（2026-01-15 终极匹配版：精确捕捉 "Choose an option (default 2 for IP):" 提示）
+# 端口: 2026 | 用户: liang | 密码: liang | BBR
 
 set -e
 
@@ -29,7 +29,7 @@ EOF
 sysctl -p >/dev/null 2>&1
 echo -e "\033[32mBBR 已启用！\033[0m"
 
-# 开放端口（必须，确保 80 可用）
+# 开放端口（证书验证必须）
 echo "开放 80-83 端口..."
 ufw allow 80:83/tcp >/dev/null 2>&1 || true
 iptables -I INPUT -p tcp --dport 80:83 -j ACCEPT >/dev/null 2>&1 || true
@@ -46,7 +46,7 @@ fi
 
 chmod +x "$TEMP_SCRIPT"
 
-# expect 自动化（精确匹配你的日志提示）
+# expect 精确匹配你的日志提示
 echo -e "\n\033[33m开始自动化安装...\033[0m"
 
 expect <<EOF
@@ -65,11 +65,11 @@ expect {
     timeout { send_user "未匹配端口输入\n"; exit 1 }
 }
 
-# 精确匹配你的日志中的 SSL 选择提示
+# 精确匹配日志中的 SSL 选择提示（包括括号、default 2 for IP、冒号）
 expect {
     -re {Choose an option \(default 2 for IP\):} { send "2\r" }
     -re {Choose SSL certificate setup method:.*} { send "2\r" }
-    timeout { send_user "未匹配 SSL 选项\n"; exit 1 }
+    timeout { send_user "未匹配 SSL 选项（请检查提示文本）\n"; exit 1 }
 }
 
 expect {
@@ -77,7 +77,7 @@ expect {
     timeout { send_user "无IPv6，继续\n" }
 }
 
-# 处理 ACME 端口（默认80，如果被占循环问新端口）
+# 处理 ACME 端口冲突（循环尝试）
 set ports {80 81 82 83}
 foreach p \$ports {
     expect {
@@ -88,13 +88,13 @@ foreach p \$ports {
     }
 }
 
-# 后续确认（如果有）
+# 兜底确认
 expect {
     -re {Would you like to set this certificate.*\[y/n\]:} { send "y\r" }
     -re {Would you like to modify --reloadcmd.*\[y/n\]:} { send "n\r" }
     -re {\[y/n\]:} { send "y\r" }
     eof { }
-    timeout { send_user "超时，假设完成\n" }
+    timeout { send_user "最终超时，假设完成\n" }
 }
 
 expect eof
@@ -124,6 +124,6 @@ echo -e "密码: $PASSWORD"
 echo ""
 echo "提示："
 echo "  • 确保服务器公网 80 端口开放（证书验证必须）"
-echo "  • 浏览器可能有证书警告，可忽略"
-echo "  • 登录后立即修改面板路径防扫描"
+echo "  • 浏览器证书警告可忽略（短期证书）"
+echo "  • 登录后立即修改面板路径（webBasePath）防扫描"
 echo "  • 检查状态: systemctl status x-ui"
