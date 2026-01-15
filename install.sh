@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + 账号 liang/liang + BBR 加速）
-# 最终优化版 - 2026-01-10，修复变量展开 + 宽松匹配 + BBR 集成
+# 最终优化版 - 2026-01-15，修复 ACME 端口提示卡住问题 + 宽松 expect 匹配
 
 PORT="2026"
 USERNAME="liang"
@@ -38,7 +38,7 @@ if ! command -v curl >/dev/null || ! command -v expect >/dev/null; then
 fi
 
 # ======================== 开放 80 端口 ========================
-echo "开放 80 端口（用于 IP SSL）..."
+echo "开放 80 端口（用于 IP SSL 证书申请）..."
 ufw allow 80 >/dev/null 2>&1 || true
 ufw reload >/dev/null 2>&1 || true
 firewall-cmd --add-port=80/tcp --permanent >/dev/null 2>&1 || true
@@ -50,34 +50,47 @@ TEMP_SCRIPT="/tmp/3x-ui-install-temp.sh"
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 chmod +x "$TEMP_SCRIPT"
 
-# ======================== expect 自动化交互 ========================
+# ======================== expect 自动化交互（升级版，防卡端口提示） ========================
 expect <<END_EXPECT
     set timeout -1
 
     spawn $TEMP_SCRIPT
 
-    # 1. 自定义端口 → y
-    expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
+    # 循环匹配所有可能的提示，使用 exp_continue 防止卡住
+    expect {
+        # 1. 自定义端口 → y
+        -re "(?i)Would you like to customize.*\\[y/n\\].*customize" { send "y\\r" ; exp_continue }
 
-    # 2. 输入端口
-    expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
+        # 2. 输入面板端口
+        -re "(?i)Please set up the panel port:.*port" { send "$PORT\\r" ; exp_continue }
 
-    # 3. SSL 证书选择 → 回车选默认 IP 证书
-    expect -re "(?i)Choose an option" { send "\\r" }
+        # 3. SSL 证书选项 → 默认回车（选 IP 证书 shortlived）
+        -re "(?i)Choose.*option.*1.*2.*Let's Encrypt" { send "\\r" ; exp_continue }
 
-    # 4. IPv6 → 跳过
-    expect -re "(?i)Do you have an IPv6.*skip" { send "\\r" }
+        # 4. IPv6 跳过（留空回车）
+        -re "(?i)Do you have an IPv6.*(include|empty to skip)" { send "\\r" ; exp_continue }
 
-    # 5. 域名相关 → 跳过
-    expect -re "(?i)(domain|域名|enter your domain)" { send "\\r" }
+        # 5. 域名输入 → 跳过（IP 证书不需要域名）
+        -re "(?i)(domain|域名|enter your domain)" { send "\\r" ; exp_continue }
 
-    # 6. 其他 y/n → 默认 n
-    expect -re "\\[y/n\\]" { send "n\\r" }
+        # 6. 关键：ACME HTTP-01 listener 端口提示（宽松匹配各种写法）
+        -re "(?i)(port.*(use|choose|for|listener|standalone).*acme|http-?01|80)" { 
+            send "\\r"   ;# 直接用默认 80
+            exp_continue 
+        }
 
-    # 兜底（防官方加新提示）
-    expect -re ".*" { send "\\r" }
+        # 7. 如果 80 端口被占，问另一个端口 → 直接回车（让它 fallback 或报错）
+        -re "(?i)(another|enter another|in use).*port" { send "\\r" ; exp_continue }
 
-    expect eof
+        # 8. 其他所有 y/n 提示 → 默认 n
+        -re "(?i)\\[y/n\\]" { send "n\\r" ; exp_continue }
+
+        # 9. 最终兜底：任何未匹配输出都继续等（防止卡在杂乱输出）
+        -re ".*" { exp_continue }
+
+        # 结束
+        eof
+    }
 END_EXPECT
 
 # 清理临时文件
@@ -95,5 +108,5 @@ echo -e "面板地址: \033[36mhttps://你的IP:$PORT\033[0m"
 echo -e "用户名: \033[36m$USERNAME\033[0m"
 echo -e "密码:   \033[36m$PASSWORD\033[0m"
 echo -e "\033[33m管理命令: x-ui\033[0m"
-echo -e "\033[31mIP证书仅6天有效，生产环境建议改域名证书\033[0m"
-echo -e "\033[32mBBR 加速已永久启用！可运行 sysctl net.ipv4.tcp_congestion_control 验证（应显示 bbr）\033[0m"
+echo -e "\033[31m注意：IP证书仅约6天有效，会自动续期；生产环境建议用域名+90天证书\033[0m"
+echo -e "\033[32mBBR 加速已永久启用！验证：sysctl net.ipv4.tcp_congestion_control （应显示 bbr）\033[0m"
