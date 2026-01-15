@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + 账号 liang/liang + BBR 加速）
-# 最终修复版 - 覆盖 IPv6 + 80 端口 + 超级兜底
+# 超级宽松版 - 覆盖最新提示变化 + IPv6 + 80 端口 + 终极兜底
 
 PORT="2026"
 USERNAME="liang"
@@ -45,7 +45,7 @@ TEMP_SCRIPT="/tmp/3x-ui-install-temp.sh"
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 chmod +x "$TEMP_SCRIPT"
 
-# expect - 覆盖 IPv6 + 80 端口 + 超级兜底
+# expect - 最宽松匹配（覆盖最新提示变化）
 expect <<END_EXPECT
     set timeout -1
 
@@ -54,22 +54,22 @@ expect <<END_EXPECT
     expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
     expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
 
-    # SSL 菜单 - 回车选默认 2 (IP证书)
-    expect -re "(?i)Choose an option" { send "\\r" }
+    # SSL 菜单 - 宽松匹配（兼容 MANDATORY 和各种文字）
+    expect -re "(?i)Choose an option|Choose SSL certificate setup method|SSL Certificate Setup" { send "\\r" }
 
     # 80 端口确认 - 回车默认 80
-    expect -re "(?i)Port to use for ACME HTTP-01 listener" { send "\\r" }
+    expect -re "(?i)Port to use for ACME|ACME HTTP-01 listener|port 80" { send "\\r" }
 
     # IPv6 确认 - 回车留空跳过
-    expect -re "(?i)Do you have an IPv6.*skip|IPv6 address to include" { send "\\r" }
+    expect -re "(?i)Do you have an IPv6|IPv6 address to include" { send "\\r" }
 
     # 域名相关 → 跳过
-    expect -re "(?i)(domain|域名|enter your domain)" { send "\\r" }
+    expect -re "(?i)domain|域名|enter your domain" { send "\\r" }
 
     # 其他 y/n → 默认 n
     expect -re "\\[y/n\\]" { send "n\\r" }
 
-    # 超级兜底（防官方加新提示）
+    # 终极兜底（匹配任何剩余提示，回车跳过）
     expect -re ".*" { send "\\r" }
 
     expect eof
