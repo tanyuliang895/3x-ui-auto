@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + liang/liang + BBR）
-# 修复 expect 语法错误 - 模式字符串用双引号保护，避免 Tcl 解析 [y/n] 作为命令
+# 修复版 - 模式字符串用双引号包裹，避免 Tcl 误解析 [y/n] 为命令
 
 PORT="2026"
 USERNAME="liang"
@@ -50,7 +50,7 @@ fi
 
 chmod +x "$TEMP_SCRIPT"
 
-# expect 自动化
+# expect 自动化 - 双引号保护模式字符串
 echo "开始自动化安装（expect 部分）... 请耐心等待日志输出"
 
 expect <<'END_EXPECT'
@@ -59,7 +59,7 @@ expect <<'END_EXPECT'
 
     spawn bash /tmp/3x-ui-install.sh
 
-    # 1. 自定义端口 [y/n]
+    # 1. 自定义端口 [y/n] - 双引号包裹
     expect {
         "Would you like to customize the Panel Port settings? (If not, a random port will be applied) [y/n]: " { send "y\r" }
         timeout { send_user "\nTIMEOUT: 未匹配到端口自定义 [y/n] 提示\n"; exit 1 }
@@ -85,7 +85,7 @@ expect <<'END_EXPECT'
         timeout { send_user "\nNo IPv6 prompt, continue\n" }
     }
 
-    # 5. ACME 端口处理（多次 expect 匹配占用情况）
+    # 5. ACME 端口处理（多次匹配）
     expect {
         "Port to use for ACME HTTP-01 listener (default 80): " { send "80\r" }
         "Port * is in use." { send "81\r" }
@@ -101,7 +101,7 @@ expect <<'END_EXPECT'
         timeout { }
     }
 
-    # 6. 兜底其他提示
+    # 6. 兜底
     expect {
         -re "\\[y/n\\]: " { send "n\r" }
         -re ".*: " { send "\r" }
