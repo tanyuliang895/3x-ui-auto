@@ -1,6 +1,6 @@
 #!/bin/bash
 # 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + 账号 liang/liang + BBR 加速）
-# 最终优化版 - 2026-01-10，修复变量展开 + 宽松匹配 + BBR 集成
+# 最终优化版 - 2026-01-15，修复 expect 匹配 + 加下载检查 + 更多端口尝试 + 等待设置用户名密码
 
 PORT="2026"
 USERNAME="liang"
@@ -48,34 +48,70 @@ iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true
 # ======================== 下载官方 install.sh ========================
 TEMP_SCRIPT="/tmp/3x-ui-install-temp.sh"
 curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
+
+# 检查下载是否成功
+if [ ! -s "$TEMP_SCRIPT" ]; then
+    echo -e "\033[31m下载官方安装脚本失败，请检查网络或稍后重试\033[0m"
+    exit 1
+fi
+
 chmod +x "$TEMP_SCRIPT"
 
 # ======================== expect 自动化交互 ========================
 expect <<END_EXPECT
-    set timeout -1
+    set timeout 60  ;# 延长超时时间，防慢网卡住
 
     spawn $TEMP_SCRIPT
 
-    # 1. 自定义端口 → y
-    expect -re "(?i)Would you like to customize.*\\[y/n\\]" { send "y\\r" }
+    # 1. 自定义端口 → y (更宽松匹配，忽略空格/大小写)
+    expect {
+        -re "(?i)customize.*port.*\\[y/n\\]" { send "y\\r" }
+        timeout { send_user "Timeout waiting for port customize prompt\\n"; exit 1 }
+    }
 
-    # 2. 输入端口
-    expect -re "(?i)Please set up the panel port:" { send "$PORT\\r" }
+    # 2. 输入端口 (更宽松匹配)
+    expect {
+        -re "(?i)set.*panel.*port.*:" { send "$PORT\\r" }
+        -re "(?i)port.*:" { send "$PORT\\r" }
+        timeout { send_user "Timeout waiting for port input prompt\\n"; exit 1 }
+    }
 
-    # 3. SSL 证书选择 → 回车选默认 IP 证书
-    expect -re "(?i)Choose an option" { send "\\r" }
+    # 3. SSL 证书选择 → 回车选默认 IP 证书 (option 2)
+    expect {
+        -re "(?i)choose.*option.*default.*2" { send "\\r" }
+        -re "(?i)ssl.*method.*:" { send "2\\r" }  ;# 如果没默认，直接选2
+        timeout { send_user "Timeout waiting for SSL option prompt\\n"; exit 1 }
+    }
 
-    # 4. IPv6 → 跳过
-    expect -re "(?i)Do you have an IPv6.*skip" { send "\\r" }
+    # 4. 处理 80 端口占用 → 尝试 81,82,83,84,8080 (循环匹配)
+    set alt_ports [list 81 82 83 84 8080]
+    foreach alt_port \$alt_ports {
+        expect {
+            -re "(?i)port.*in use.*another port.*:" { send "\$alt_port\\r" }
+            -re "(?i)acme.sh.*port.*:" { send "\$alt_port\\r" }
+        }
+    }
 
-    # 5. 域名相关 → 跳过
-    expect -re "(?i)(domain|域名|enter your domain)" { send "\\r" }
+    # 5. IPv6 → 跳过
+    expect {
+        -re "(?i)ipv6.*skip" { send "\\r" }
+        -re "(?i)ipv6.*\\[y/n\\]" { send "n\\r" }
+    }
 
-    # 6. 其他 y/n → 默认 n
-    expect -re "\\[y/n\\]" { send "n\\r" }
+    # 6. 域名相关 → 跳过
+    expect {
+        -re "(?i)(domain|域名|enter your domain)" { send "\\r" }
+    }
 
-    # 兜底（防官方加新提示）
-    expect -re ".*" { send "\\r" }
+    # 7. 其他 y/n → 默认 n
+    expect {
+        -re "\\[y/n\\]" { send "n\\r" }
+    }
+
+    # 兜底（防官方加新提示，按回车跳过）
+    expect {
+        -re ".*:" { send "\\r" }
+    }
 
     expect eof
 END_EXPECT
@@ -83,9 +119,17 @@ END_EXPECT
 # 清理临时文件
 rm -f "$TEMP_SCRIPT" >/dev/null 2>&1
 
-# ======================== 设置固定账号 ========================
+# ======================== 设置固定账号（加等待循环） ========================
 echo "设置固定账号 $USERNAME / $PASSWORD ..."
-/usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" >/dev/null 2>&1 || true
+
+for i in {1..30}; do
+    if /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
+        /usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" >/dev/null 2>&1 || true
+        break
+    fi
+    echo "等待 x-ui 服务启动... ($i/30)"
+    sleep 2
+done
 
 # ======================== 重启服务 ========================
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
@@ -97,3 +141,4 @@ echo -e "密码:   \033[36m$PASSWORD\033[0m"
 echo -e "\033[33m管理命令: x-ui\033[0m"
 echo -e "\033[31mIP证书仅6天有效，生产环境建议改域名证书\033[0m"
 echo -e "\033[32mBBR 加速已永久启用！可运行 sysctl net.ipv4.tcp_congestion_control 验证（应显示 bbr）\033[0m"
+echo -e "\033[33m建议: 每5天运行 acme.sh --renew -d 你的IP --force 续期证书，或加 crontab\033[0m"
