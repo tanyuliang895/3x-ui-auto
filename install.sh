@@ -1,6 +1,6 @@
 #!/bin/bash
-# 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + 用户/密码 liang/liang + BBR）
-# 优化版 - 精确匹配官方 install.sh 最新提示，硬编码路径/端口，处理端口占用
+# 3X-UI 一键全自动安装脚本（零交互，固定端口 2026 + liang/liang + BBR）
+# 修复版 - 硬编码路径/端口，去除 env 依赖，移除引起 no such variable 的 debug
 
 PORT="2026"
 USERNAME="liang"
@@ -39,7 +39,7 @@ ufw reload >/dev/null 2>&1 || true
 firewall-cmd --add-port=80/tcp --permanent >/dev/null 2>&1 && firewall-cmd --reload >/dev/null 2>&1 || true
 iptables -I INPUT -p tcp --dport 80 -j ACCEPT >/dev/null 2>&1 || true
 
-# 下载官方 install.sh
+# 下载官方脚本
 TEMP_SCRIPT="/tmp/3x-ui-install.sh"
 curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 
@@ -50,7 +50,10 @@ fi
 
 chmod +x "$TEMP_SCRIPT"
 
-# expect 自动化 - 精确匹配官方提示
+echo "TEMP_SCRIPT path: $TEMP_SCRIPT"
+ls -l "$TEMP_SCRIPT" || echo "文件不存在！"
+
+# expect 自动化 - 硬编码路径/端口，移除 env 引用
 echo "开始自动化安装（expect 部分）... 请耐心等待日志输出"
 
 expect <<'END_EXPECT'
@@ -66,26 +69,26 @@ expect <<'END_EXPECT'
         eof     { send_user "\nEOF: install.sh 意外结束\n"; exit 1 }
     }
 
-    # 2. 输入端口
+    # 2. 输入端口 - 硬编码 2026
     expect {
         "Please set up the panel port: " { send "2026\r" }
         timeout { send_user "\nTIMEOUT: 未匹配到 'Please set up the panel port:'\n"; exit 1 }
     }
 
-    # 3. SSL 证书选择（默认回车选 IP 证书 option 2）
+    # 3. SSL 证书选择
     expect {
         "Choose an option (default 2 for IP): " { send "\r" }
         "Choose SSL certificate setup method:" { send "2\r" }
         timeout { send_user "\nTIMEOUT: 未匹配到 SSL 选项提示\n"; exit 1 }
     }
 
-    # 4. IPv6（空回车跳过）
+    # 4. IPv6 跳过
     expect {
         "Do you have an IPv6 address to include? (leave empty to skip): " { send "\r" }
         timeout { send_user "\nNo IPv6 prompt, continue\n" }
     }
 
-    # 5. ACME 端口（默认80，如果占用循环尝试备用端口）
+    # 5. ACME 端口处理（循环尝试备用）
     set tried 0
     set alt_ports {81 82 83 84 8080 8000}
     while {$tried < 6} {
@@ -94,7 +97,7 @@ expect <<'END_EXPECT'
             "Port * is in use." {
                 incr tried
                 set alt [lindex $alt_ports $tried]
-                send_user "\n端口占用，尝试备用端口 $alt\n"
+                send_user "\n端口占用，尝试 $alt\n"
                 send "$alt\r"
             }
             "Enter another port for acme.sh standalone listener (leave empty to abort): " {
@@ -102,11 +105,11 @@ expect <<'END_EXPECT'
                 set alt [lindex $alt_ports $tried]
                 send "$alt\r"
             }
-            timeout { send_user "\nACME 端口处理超时，跳过\n"; break }
+            timeout { send_user "\nACME 端口超时，跳过\n"; break }
         }
     }
 
-    # 6. 其他可能的提示（默认 n 或回车）
+    # 6. 兜底其他提示
     expect {
         -re "\\[y/n\\]: " { send "n\r" }
         -re ".*: " { send "\r" }
@@ -115,7 +118,7 @@ expect <<'END_EXPECT'
         "installation finished" { }
         "x-ui.*running now" { }
         eof { }
-        timeout { send_user "\n最终超时，假设安装完成\n" }
+        timeout { send_user "\n最终超时，假设完成\n" }
     }
 
     expect eof
@@ -123,7 +126,7 @@ END_EXPECT
 
 rm -f "$TEMP_SCRIPT" 2>/dev/null
 
-# 设置用户名密码（等待 x-ui 命令可用）
+# 设置用户名密码
 echo "等待 x-ui 服务启动并设置账号..."
 for i in {1..40}; do
     if /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
@@ -135,12 +138,12 @@ for i in {1..40}; do
     sleep 3
 done
 
-# 重启服务
+# 重启
 /usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
 
 echo -e "\n\033[32m安装完成！\033[0m"
-echo -e "面板地址: \033[36mhttps://你的服务器IP:$PORT\033[0m"
-echo -e "用户名: \033[36m$USERNAME\033[0m   密码: \033[36m$PASSWORD\033[0m"
-echo -e "\033[33mx-ui 命令: x-ui start/stop/restart/status/update 等\033[0m"
-echo -e "\033[31mIP证书仅6天有效，生产环境请尽快换域名证书\033[0m"
-echo -e "\033[32mBBR 已启用，验证: sysctl net.ipv4.tcp_congestion_control （应为 bbr）\033[0m"
+echo -e "面板: https://你的IP:2026"
+echo -e "用户: $USERNAME   密码: $PASSWORD"
+echo -e "\033[33m命令: x-ui\033[0m"
+echo -e "\033[31mIP证书6天有效，建议换域名\033[0m"
+echo -e "\033[32mBBR 启用，验证: sysctl net.ipv4.tcp_congestion_control\033[0m"
