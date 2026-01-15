@@ -46,7 +46,7 @@ expect <<END_EXPECT
     expect -re "(?i)Choose an option" { send "n\\r" }
 
     # 后续所有证书相关提示 - 全部回车或 n 跳过
-    expect -re "(?i)(Port to use|IPv6|domain|域名|enter)" { send "\\r" }
+    expect -re "(?i)(Port to use|IPv6|domain|域名|enter|SSL|acme)" { send "\\r" }
     expect -re "\\[y/n\\]" { send "n\\r" }
     expect -re ".*" { send "\\r" }  # 超级兜底
 
