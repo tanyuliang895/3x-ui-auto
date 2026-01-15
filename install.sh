@@ -1,6 +1,6 @@
 #!/bin/bash
-# 3X-UI 全自动安装脚本（跳过 SSL 强制版 + BBR + 端口 2026 + liang/liang）
-# 完全自动，无需手动交互，面板用 HTTP
+# 3X-UI 全自动安装脚本（完全跳过 SSL 强制版 + BBR + 端口 2026 + liang/liang）
+# 访问: http://你的IP:2026
 
 set -e
 
@@ -9,8 +9,8 @@ USERNAME="liang"
 PASSWORD="liang"
 
 echo -e "\033[36m========================================\033[0m"
-echo -e "   3X-UI 全自动安装 (端口: \033[32m$PORT\033[0m | 用户/密码: $USERNAME/$PASSWORD)"
-echo -e "   跳过 SSL 强制设置（后续可手动加）"
+echo -e "   3X-UI 全自动安装（跳过 SSL）"
+echo -e "   端口: \033[32m$PORT\033[0m | 用户名: \033[32m$USERNAME\033[0m | 密码: \033[32m$PASSWORD\033[0m"
 echo -e "\033[36m========================================\033[0m\n"
 
 # root 检查
@@ -18,9 +18,9 @@ echo -e "\033[36m========================================\033[0m\n"
 
 # 依赖
 echo "安装依赖..."
-apt update -y && apt install -y curl expect socat ca-certificates wget tar >/dev/null 2>&1 || true
+apt update -y && apt install -y curl wget tar expect socat ca-certificates >/dev/null 2>&1 || true
 
-# BBR
+# BBR 永久启用
 echo -e "\n\033[33m启用 BBR...\033[0m"
 modprobe tcp_bbr 2>/dev/null || true
 cat >> /etc/sysctl.conf <<EOF
@@ -30,31 +30,43 @@ EOF
 sysctl -p >/dev/null 2>&1
 echo -e "\033[32mBBR 已启用！\033[0m"
 
-# 下载并修改官方 install.sh（跳过 SSL 部分）
-echo "下载并 patch 官方脚本（跳过 SSL）..."
-TMP_INSTALL="/tmp/3x-ui-install.sh"
-curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o "$TMP_INSTALL"
+# 开放面板端口
+echo "开放端口 $PORT..."
+ufw allow "$PORT"/tcp >/dev/null 2>&1 || true
+iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT >/dev/null 2>&1 || true
 
-# 强制跳过 SSL 部分（注释掉或替换为 n）
-sed -i 's/read -r -p "Choose SSL certificate setup method:/# &/' "$TMP_INSTALL"
-sed -i 's/read -r -p "Choose an option (default 2 for IP):/# &/' "$TMP_INSTALL"
-sed -i 's/read -r -p "Port to use for ACME HTTP-01 listener/# &/' "$TMP_INSTALL"
-sed -i 's/read -r -p "Do you have an IPv6 address/# &/' "$TMP_INSTALL"
-sed -i 's/read -r -p "Would you like to set this certificate/# &/' "$TMP_INSTALL"
-sed -i 's/acme.sh --issue/# &/' "$TMP_INSTALL"
-sed -i 's/acme.sh --install-cert/# &/' "$TMP_INSTALL"
-sed -i 's/echo "SSL Certificate Setup (MANDATORY)"/echo "SSL 强制设置已跳过（手动添加）"/' "$TMP_INSTALL"
+# 下载官方 install.sh
+TEMP_SCRIPT="/tmp/3x-ui-install.sh"
+echo "下载官方脚本..."
+curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh -o "$TEMP_SCRIPT"
 
-chmod +x "$TMP_INSTALL"
+if [ ! -s "$TEMP_SCRIPT" ]; then
+    echo -e "\033[31m下载失败\033[0m"
+    exit 1
+fi
 
-# 运行修改后的脚本（expect 只处理端口）
-echo -e "\n\033[33m运行修改版官方脚本...\033[0m"
+chmod +x "$TEMP_SCRIPT"
+
+# patch 跳过 SSL（注释掉所有证书相关代码）
+echo "跳过 SSL 强制设置..."
+sed -i '/SSL Certificate Setup/d' "$TEMP_SCRIPT"
+sed -i '/Choose SSL certificate setup method/d' "$TEMP_SCRIPT"
+sed -i '/Let'\''s Encrypt/d' "$TEMP_SCRIPT"
+sed -i '/acme.sh/d' "$TEMP_SCRIPT"
+sed -i '/read -r -p "Choose an option/d' "$TEMP_SCRIPT"
+sed -i '/read -r -p "Port to use for ACME/d' "$TEMP_SCRIPT"
+sed -i '/read -r -p "Do you have an IPv6/d' "$TEMP_SCRIPT"
+sed -i '/read -r -p "Would you like to set this certificate/d' "$TEMP_SCRIPT"
+sed -i 's/echo "SSL Certificate Setup (MANDATORY)"/echo "SSL 已跳过（手动添加）"/g' "$TEMP_SCRIPT"
+
+# 运行 patch 后的脚本（expect 只处理端口）
+echo -e "\n\033[33m运行 patch 版脚本...\033[0m"
 
 expect <<EOF
 set timeout 600
 log_user 1
 
-spawn bash "$TMP_INSTALL"
+spawn bash "$TEMP_SCRIPT"
 
 expect {
     -re {Would you like to customize the Panel Port settings.*\[y/n\]:} { send "y\r" }
@@ -66,7 +78,7 @@ expect {
     timeout { send_user "未匹配端口输入\n" }
 }
 
-# 其他提示默认或 y
+# 其他所有提示默认 y 或跳过
 expect {
     -re {\[y/n\]:} { send "y\r" }
     eof { }
@@ -76,30 +88,46 @@ expect {
 expect eof
 EOF
 
-rm -f "$TMP_INSTALL" 2>/dev/null
+rm -f "$TEMP_SCRIPT" 2>/dev/null
 
-# 强制设置账号
+# 手动补齐服务文件（防止未创建）
+echo "补齐服务文件..."
+cat > /etc/systemd/system/x-ui.service <<EOF
+[Unit]
+Description=x-ui Service
+After=network.target
+
+[Service]
+WorkingDirectory=/usr/local/x-ui/
+ExecStart=/usr/local/x-ui/x-ui
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=1048576
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+# 启动服务
+systemctl daemon-reload
+systemctl enable x-ui
+systemctl start x-ui
+
+# 强制设置账号（覆盖官方随机）
 echo -e "\n\033[33m设置账号...\033[0m"
 sleep 10
-for i in {1..20}; do
-    if [ -x /usr/local/x-ui/x-ui ] && /usr/local/x-ui/x-ui setting --help >/dev/null 2>&1; then
-        /usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" -port "$PORT" >/dev/null 2>&1
-        echo -e "\033[32m账号设置完成！\033[0m"
-        break
-    fi
-    sleep 5
-done
-
-/usr/local/x-ui/x-ui restart >/dev/null 2>&1 || true
+/usr/local/x-ui/x-ui setting -username "$USERNAME" -password "$PASSWORD" -port "$PORT" || true
+/usr/local/x-ui/x-ui restart
 
 IP=$(curl -s4 icanhazip.com || echo "你的IP")
-echo -e "\n\033[32m安装完成！（SSL 已跳过）\033[0m"
-echo -e "访问: http://$IP:$PORT （HTTP 方式，建议后续手动加证书）"
-echo -e "用户名: $USERNAME"
-echo -e "密码: $PASSWORD"
+echo -e "\n\033[32m安装完成！\033[0m"
+echo -e "访问面板: \033[36mhttp://$IP:$PORT\033[0m （HTTP 方式）"
+echo -e "用户名: \033[32m$USERNAME\033[0m"
+echo -e "密码:   \033[32m$PASSWORD\033[0m"
 echo ""
-echo "提示："
-echo "  • 登录后立即修改面板路径（webBasePath）"
-echo "  • 手动加证书：运行 'x-ui' → SSL证书 → 选2 → 试端口"
-echo "  • 检查状态: systemctl status x-ui"
+echo "重要提示："
+echo "  • 登录后**立即修改面板路径** (webBasePath) 防扫描"
+echo "  • 检查服务: systemctl status x-ui"
+echo "  • 后续加 SSL: 面板内 SSL证书 → 选2 (IP证书) → 试端口 80"
 echo "  • 卸载: /usr/local/x-ui/x-ui uninstall"
+echo ""
