@@ -1,77 +1,83 @@
 #!/bin/bash
-# 生产级 3X-UI 自动部署脚本
-# 功能：
-# 1. 系统升级（自动跳过 cloud.cfg 冲突）
-# 2. 安装最新 HWE 内核
-# 3. 启用 BBR v2
-# 4. 安装最新 3X-UI 面板
-# 5. 自动配置账号/密码/端口
-# 用法：
-# bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/x-ui-auto/main/install.sh)
+# X-UI 一键安装脚本（不升级系统）
+# 自动启用 BBR 加速
+# 用法：bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/x-ui-auto/main/install.sh)
+
+# ================== 配置参数 ==================
+USERNAME="liang"   # 用户名
+PASSWORD="liang"   # 密码
+PORT="2026"        # 端口
+# ==============================================
 
 set -e
 
-# ================== 配置参数 ==================
-USERNAME="liang"
-PASSWORD="liang"
-PORT="2026"
-# =============================================
+echo "正在安装 X-UI（用户名: $USERNAME，端口: $PORT）"
 
-echo "========== 1. 更新系统并升级所有包（自动处理配置冲突） =========="
-apt update -y
-DEBIAN_FRONTEND=noninteractive \
-apt -o Dpkg::Options::="--force-confdef" \
-    -o Dpkg::Options::="--force-confold" \
-    full-upgrade -y
-apt autoremove -y
+# ================== 依赖检查 ==================
+if ! command -v curl &>/dev/null; then
+  echo "安装依赖: curl"
+  if command -v apt-get &>/dev/null; then
+    apt-get update -y && apt-get install -y curl
+  elif command -v yum &>/dev/null; then
+    yum install -y curl
+  else
+    echo "错误：不支持的系统，请手动安装 curl"
+    exit 1
+  fi
+fi
 
-echo "========== 2. 安装最新 HWE 内核 =========="
-apt install -y --install-recommends linux-generic-hwe-$(lsb_release -rs)
-
-echo "========== 3. 启用 BBR (v2 + fq) =========="
-cat > /etc/sysctl.d/99-bbr.conf <<EOF
-net.core.default_qdisc=fq
-net.ipv4.tcp_congestion_control=bbr
-net.ipv4.tcp_ecn=1
-net.ipv4.tcp_fastopen=3
-EOF
-sysctl --system
-
-echo "========== 4. 安装依赖 =========="
-apt install -y curl wget sudo
-
-echo "========== 5. 安装最新官方 3X-UI =========="
-bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+# ================== 安装 X-UI ==================
+bash <(curl -Ls https://raw.githubusercontent.com/vaxilu/x-ui/master/install.sh)
 
 echo "等待面板初始化..."
 sleep 6
 
-echo "========== 6. 无交互写入面板配置 =========="
-x-ui setting -username ${USERNAME}
-x-ui setting -password ${PASSWORD}
-x-ui setting -port ${PORT}
+# ================== 配置面板账号/端口 ==================
+x-ui setting -username "$USERNAME"
+x-ui setting -password "$PASSWORD"
+x-ui setting -port "$PORT"
 x-ui setting -webBasePath /
 
-echo "========== 7. 重启面板服务 =========="
-systemctl restart x-ui
+# ================== BBR 加速 ==================
+enable_bbr() {
+  echo "开始启用 BBR 加速..."
 
+  kernel_version=$(uname -r | cut -d'.' -f1-2)
+
+  version_ge() {
+    [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]
+  }
+
+  if ! version_ge "$kernel_version" "4.9"; then
+    echo "当前内核版本 $kernel_version，不支持 BBR（需 ≥ 4.9）"
+    return
+  fi
+
+  grep -q "net.core.default_qdisc=fq" /etc/sysctl.conf || \
+    echo "net.core.default_qdisc=fq" >> /etc/sysctl.conf
+
+  grep -q "net.ipv4.tcp_congestion_control=bbr" /etc/sysctl.conf || \
+    echo "net.ipv4.tcp_congestion_control=bbr" >> /etc/sysctl.conf
+
+  sysctl -p >/dev/null 2>&1
+
+  cc=$(sysctl -n net.ipv4.tcp_congestion_control)
+  qdisc=$(sysctl -n net.core.default_qdisc)
+
+  if [[ "$cc" == "bbr" && "$qdisc" == "fq" ]]; then
+    echo "BBR 加速已成功启用"
+  else
+    echo "BBR 启用失败（可能被 VPS 限制）"
+  fi
+}
+
+enable_bbr
+
+# ================== 安装完成提示 ==================
 IP=$(curl -4s icanhazip.com || echo "服务器IP")
-
 echo
-echo "============== 安装完成 =============="
-echo "访问地址: http://${IP}:${PORT}"
-echo "用户名: ${USERNAME}"
-echo "密码: ${PASSWORD}"
-echo "======================================"
-
-# ================== 8. 提示重启 ==================
-echo
-if [[ "$(uname -r)" != *"-hwe"* ]]; then
-  echo "⚠️ 内核已升级，需要 reboot 才能启用最新 BBR"
-  echo "请执行：reboot"
-else
-  echo "系统已经是 HWE 内核，BBR 应该已生效"
-  echo "你可以用以下命令验证："
-  echo "  uname -r"
-  echo "  sysctl net.ipv4.tcp_congestion_control"
-fi
+echo "================ 安装完成 ================"
+echo "访问地址: http://$IP:$PORT"
+echo "用户名: $USERNAME"
+echo "密码: $PASSWORD"
+echo "=========================================="
