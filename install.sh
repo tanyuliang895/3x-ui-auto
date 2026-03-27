@@ -1,13 +1,11 @@
 #!/bin/bash
-# 生产级 X-UI + 网络优化脚本（完全无交互）
+# 生产级 X-UI 安装+网络优化+面板修复脚本
 # 功能：
-# 1. 自动等待 dpkg/apt 锁
-# 2. 安装最新官方 X-UI
-# 3. 自动确认安全提示
-# 4. 配置用户名/密码/端口
-# 5. 启用 BBR v2 + TCP/队列/MTU优化
-# 用法：
-# sudo bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/x-ui-auto/main/install.sh)
+# 1. 安装最新官方 X-UI（无交互）
+# 2. 自动配置用户名/密码/端口
+# 3. 启用 BBR v2 + TCP/MTU优化
+# 4. 检查服务和端口，自动修复面板 503
+# 5. 输出状态和日志
 
 set -e
 
@@ -15,6 +13,7 @@ set -e
 USERNAME="liang"
 PASSWORD="liang"
 PORT="2026"
+SERVICE=x-ui
 # =============================================
 
 echo "========== 0. 等待 dpkg/apt 锁释放 =========="
@@ -29,7 +28,7 @@ echo "========== 1. 安装依赖 =========="
 apt update -y
 apt install -y curl wget tar sudo ethtool
 
-echo "========== 2. 安装最新官方 X-UI（自动确认 y） =========="
+echo "========== 2. 安装最新官方 X-UI =========="
 yes | bash <(curl -Ls https://raw.githubusercontent.com/vaxilu/x-ui/master/install.sh)
 sleep 6
 
@@ -82,18 +81,44 @@ fi
 ulimit -n 1048576
 echo "文件描述符已优化"
 
-echo "========== 5. 重启 X-UI 服务 =========="
-systemctl restart x-ui || echo "x-ui 服务第一次安装未加载，稍后生效"
+echo "========== 5. 检查 X-UI 服务状态并修复 503 =========="
+systemctl status $SERVICE --no-pager || echo "$SERVICE 服务未运行，尝试启动..."
+systemctl restart $SERVICE || echo "第一次启动未加载，稍后生效"
+
+echo
+echo "========== 6. 检查端口占用 =========="
+if ss -tulnp | grep $PORT; then
+    echo "端口 $PORT 已被占用，请手动处理冲突"
+else
+    echo "端口 $PORT 未被占用"
+fi
+
+echo
+echo "========== 7. 放行防火墙端口 =========="
+if command -v ufw &>/dev/null; then
+    sudo ufw allow $PORT/tcp
+    sudo ufw reload
+    echo "UFW 已放行 TCP $PORT"
+fi
+
+if command -v iptables &>/dev/null; then
+    sudo iptables -I INPUT -p tcp --dport $PORT -j ACCEPT
+    echo "iptables 已放行 TCP $PORT"
+fi
+
+echo
+echo "========== 8. 输出最近 50 条 X-UI 日志 =========="
+journalctl -u $SERVICE -n 50 --no-pager
 
 IP=$(curl -4s icanhazip.com || echo "服务器IP")
 echo
-echo "============== 安装完成 =============="
+echo "============== 安装/优化完成 =============="
 echo "访问地址: http://$IP:$PORT"
 echo "用户名: $USERNAME"
 echo "密码: $PASSWORD"
-echo "======================================"
+echo "=========================================="
 echo
-echo "⚠️ 建议重启服务器以确保 BBR 和 MTU 设置生效：sudo reboot"
+echo "⚠️ 建议重启服务器以确保 BBR、MTU 和端口设置生效：sudo reboot"
 echo "查看 BBR 状态：sysctl net.ipv4.tcp_congestion_control"
 echo "查看网卡队列：ethtool -g $NIC"
 echo "查看文件描述符：ulimit -n"
