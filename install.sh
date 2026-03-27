@@ -1,10 +1,11 @@
 #!/bin/bash
-# X-UI + 一键网络优化生产级安装脚本
+# 生产级 X-UI + 网络优化脚本（完全无交互）
 # 功能：
 # 1. 自动等待 dpkg/apt 锁
-# 2. 安装最新 X-UI 官方版本
-# 3. 配置用户名/密码/端口
-# 4. 启用 BBR v2 + fq + TCP/队列/MTU优化
+# 2. 安装最新官方 X-UI
+# 3. 自动确认安全提示
+# 4. 配置用户名/密码/端口
+# 5. 启用 BBR v2 + TCP/队列/MTU优化
 # 用法：
 # sudo bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/x-ui-auto/main/install.sh)
 
@@ -16,7 +17,6 @@ PASSWORD="liang"
 PORT="2026"
 # =============================================
 
-# ---------- 0. 等待 dpkg/apt 锁 ----------
 echo "========== 0. 等待 dpkg/apt 锁释放 =========="
 while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
       fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
@@ -25,26 +25,21 @@ while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
     sleep 3
 done
 
-# ---------- 1. 安装依赖 ----------
 echo "========== 1. 安装依赖 =========="
 apt update -y
 apt install -y curl wget tar sudo ethtool
 
-# ---------- 2. 安装 X-UI ----------
-echo "========== 2. 安装最新官方 X-UI =========="
-bash <(curl -Ls https://raw.githubusercontent.com/vaxilu/x-ui/master/install.sh)
-echo "等待面板初始化..."
+echo "========== 2. 安装最新官方 X-UI（自动确认 y） =========="
+yes | bash <(curl -Ls https://raw.githubusercontent.com/vaxilu/x-ui/master/install.sh)
 sleep 6
 
-# ---------- 3. 配置面板账号/端口 ----------
 echo "========== 3. 配置面板账号/端口 =========="
 x-ui setting -username "$USERNAME"
 x-ui setting -password "$PASSWORD"
 x-ui setting -port "$PORT"
 x-ui setting -webBasePath /
 
-# ---------- 4. 启用 BBR v2 + 网络优化 ----------
-echo "========== 4. 启用 BBR v2 + TCP/MTU优化 =========="
+echo "========== 4. 启用 BBR v2 + 网络优化 =========="
 kernel_version=$(uname -r | cut -d'.' -f1-2)
 version_ge() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
 
@@ -54,7 +49,6 @@ else
     echo "⚠️ 内核版本 $kernel_version < 4.9，不支持 BBR v2"
 fi
 
-# TCP 优化
 cat > /etc/sysctl.d/99-optim-network.conf <<EOF
 net.core.default_qdisc=fq
 net.ipv4.tcp_congestion_control=bbr
@@ -76,7 +70,6 @@ EOF
 sysctl --system >/dev/null 2>&1
 echo "TCP 优化参数已生效"
 
-# 网卡优化
 NIC=$(ip route | grep default | awk '{print $5}' | head -n1)
 if [ -n "$NIC" ]; then
     echo "优化网卡 $NIC"
@@ -89,11 +82,9 @@ fi
 ulimit -n 1048576
 echo "文件描述符已优化"
 
-# ---------- 5. 重启 X-UI 服务 ----------
 echo "========== 5. 重启 X-UI 服务 =========="
 systemctl restart x-ui || echo "x-ui 服务第一次安装未加载，稍后生效"
 
-# ---------- 6. 完成提示 ----------
 IP=$(curl -4s icanhazip.com || echo "服务器IP")
 echo
 echo "============== 安装完成 =============="
