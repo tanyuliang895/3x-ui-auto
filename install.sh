@@ -6,7 +6,9 @@ PANEL_PASS="liang123456"
 PANEL_PORT="2026"
 PANEL_PATH="/"
 
+XUI_PIN_VERSION="v3.4.2"
 XRAY_PIN_VERSION="v26.6.27"
+
 INSTALL_URL="https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh"
 
 green="\033[32m"
@@ -204,7 +206,7 @@ install_3xui() {
   curl -fsSL --connect-timeout 20 -o "${tmp_script}" "${INSTALL_URL}"
   chmod +x "${tmp_script}"
 
-  log "开始 0 交互安装 3x-ui"
+  log "开始 0 交互安装 3x-ui ${XUI_PIN_VERSION}"
 
   env \
     XUI_NONINTERACTIVE=1 \
@@ -215,12 +217,12 @@ install_3xui() {
     XUI_INIT_WEB_BASE_PATH="${PANEL_PATH}" \
     XUI_SSL_MODE="none" \
     XUI_DB_TYPE="sqlite" \
-    bash "${tmp_script}"
+    bash "${tmp_script}" "${XUI_PIN_VERSION}"
 
   rm -f "${tmp_script}"
 
   service_enable
-  log "3x-ui 安装完成"
+  log "3x-ui ${XUI_PIN_VERSION} 安装完成"
 }
 
 force_panel_settings() {
@@ -388,6 +390,7 @@ show_result() {
   echo
   echo "========================================"
   echo "3x-ui 安装完成"
+  echo "3x-ui 版本：${XUI_PIN_VERSION}"
   echo "面板地址：http://${ip}:${PANEL_PORT}/"
   echo "用户名：${PANEL_USER}"
   echo "密码：${PANEL_PASS}"
@@ -411,7 +414,7 @@ show_result() {
   echo "x-ui log"
   echo "systemctl status x-ui --no-pager"
   echo
-  echo "提醒：不要在面板里升级 Xray Core，否则可能再次出现 Shadowrocket 有延迟但没网络。"
+  echo "提醒：不要在面板里升级 3x-ui 或 Xray Core，否则可能再次出现 Shadowrocket 有延迟但没网络。"
   echo
 }
 
