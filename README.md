@@ -1,9 +1,6 @@
-# 3X-UI 一键全自动安装脚本
+# liang 3x-ui Auto Installer
 
-最新官方版，完全零交互！
+## 一键安装
 
-### 特点
-- 固定端口 **2026**
-- 固定用户名 **liang** / 密码 **liang**（安装后自动强制设置）
-- 自动迁移旧数据 + 默认 IP SSL
-- 支持主流系统
+```bash
+bash <(curl -Ls https://raw.githubusercontent.com/tanyuliang895/3x-ui-auto/main/install.sh)
