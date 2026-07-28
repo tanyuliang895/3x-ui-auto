@@ -1,9 +1,9 @@
 #!/bin/bash
 
 # =====================================================
-# liang 3x-ui Pro v3.0
-# Multi OS VPS Installer
-# Based on MHSanaei/3x-ui
+# liang 3x-ui Auto Installer v1.0
+# MHSanaei/3x-ui
+# Zero Interaction Install
 # =====================================================
 
 set -e
@@ -14,9 +14,7 @@ export LANG=zh_CN.UTF-8
 # ================= 配置 =================
 
 USERNAME="liang"
-
-PASSWORD=$(openssl rand -hex 8 2>/dev/null || echo "liang123456")
-
+PASSWORD="liang123456"
 PORT="2026"
 
 SERVICE="x-ui"
@@ -24,17 +22,15 @@ SERVICE="x-ui"
 BACKUP_PATH="/root/x-ui-backup"
 
 
-
-# ================= Logo =================
-
+# ================= LOGO =================
 
 clear
 
 echo "
 =====================================================
-             liang 3x-ui Pro v3.0
+             liang 3x-ui Auto Installer
 
-       Multi Linux + Reality Optimized
+          MHSanaei 3x-ui Zero Interaction
 
 =====================================================
 "
@@ -59,9 +55,6 @@ fi
 
 
 source /etc/os-release
-
-
-OS=$ID
 
 
 case "$ID" in
@@ -97,7 +90,7 @@ PM="apk"
 
 *)
 
-echo "不支持系统:$ID"
+echo "不支持系统: $ID"
 
 exit 1
 
@@ -106,25 +99,11 @@ exit 1
 esac
 
 
+echo "系统: $PRETTY_NAME"
 
-ARCH=$(uname -m)
-
-
-
-echo "系统:"
-echo "$PRETTY_NAME"
-
-
-echo "架构:"
-echo "$ARCH"
-
-
-echo "包管理:"
-echo "$PM"
-
+echo "包管理: $PM"
 
 }
-
 
 
 
@@ -132,7 +111,6 @@ echo "$PM"
 
 
 install_dependencies(){
-
 
 echo
 
@@ -162,7 +140,6 @@ net-tools
 ;;
 
 
-
 yum)
 
 yum install -y epel-release || true
@@ -183,7 +160,6 @@ net-tools
 ;;
 
 
-
 dnf)
 
 dnf install -y \
@@ -200,7 +176,6 @@ net-tools
 
 
 ;;
-
 
 
 apk)
@@ -221,9 +196,7 @@ iproute2
 
 ;;
 
-
 esac
-
 
 }
 
@@ -234,22 +207,27 @@ esac
 
 install_3xui(){
 
-
 echo
 
 echo "========== 安装 MHSanaei 3x-ui =========="
 
 
+export XUI_NONINTERACTIVE=1
+
 
 bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
 
+
+unset XUI_NONINTERACTIVE
 
 
 sleep 5
 
 
 
-echo "========== 配置面板 =========="
+echo
+
+echo "========== 设置面板参数 =========="
 
 
 
@@ -273,9 +251,9 @@ echo "========== 配置面板 =========="
 
 
 
-systemctl restart x-ui || true
+systemctl restart x-ui
 
-systemctl enable x-ui || true
+systemctl enable x-ui
 
 
 }
@@ -290,13 +268,7 @@ enable_bbr(){
 
 echo
 
-echo "========== BBR优化 =========="
-
-
-
-if modprobe tcp_bbr 2>/dev/null
-
-then
+echo "========== 开启 BBR =========="
 
 
 cat >/etc/sysctl.d/99-liang-bbr.conf <<EOF
@@ -308,19 +280,7 @@ net.ipv4.tcp_congestion_control=bbr
 EOF
 
 
-sysctl --system >/dev/null 2>&1
-
-
-echo "BBR 已开启"
-
-
-else
-
-
-echo "当前内核不支持BBR"
-
-
-fi
+sysctl --system >/dev/null 2>&1 || true
 
 
 }
@@ -336,7 +296,6 @@ network_opt(){
 echo
 
 echo "========== 网络优化 =========="
-
 
 
 cat >/etc/sysctl.d/99-liang-network.conf <<EOF
@@ -381,7 +340,7 @@ if [ -n "$NIC" ]
 then
 
 
-echo "优化网卡:$NIC"
+echo "优化网卡: $NIC"
 
 
 ip link set dev "$NIC" mtu 1500 || true
@@ -397,7 +356,6 @@ fi
 ulimit -n 1048576 || true
 
 
-
 }
 
 
@@ -410,8 +368,7 @@ firewall(){
 
 echo
 
-echo "========== 防火墙 =========="
-
+echo "========== 防火墙设置 =========="
 
 
 if command -v ufw >/dev/null 2>&1
@@ -419,10 +376,9 @@ if command -v ufw >/dev/null 2>&1
 then
 
 
-ufw allow $PORT/tcp || true
+ufw allow "$PORT"/tcp || true
 
 ufw allow 443/tcp || true
-
 
 
 elif command -v firewall-cmd >/dev/null 2>&1
@@ -430,18 +386,17 @@ elif command -v firewall-cmd >/dev/null 2>&1
 then
 
 
-firewall-cmd --permanent --add-port=$PORT/tcp || true
+firewall-cmd --permanent --add-port="$PORT"/tcp || true
 
 firewall-cmd --permanent --add-port=443/tcp || true
 
 firewall-cmd --reload || true
 
 
-
 else
 
 
-iptables -I INPUT -p tcp --dport $PORT -j ACCEPT || true
+iptables -I INPUT -p tcp --dport "$PORT" -j ACCEPT || true
 
 iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
 
@@ -461,30 +416,25 @@ backup(){
 
 echo
 
-echo "========== 创建备份 =========="
-
+echo "========== 备份配置 =========="
 
 
 mkdir -p "$BACKUP_PATH"
-
 
 
 if [ -d /etc/x-ui ]
 
 then
 
-
 tar czf \
 "$BACKUP_PATH/x-ui-$(date +%F).tar.gz" \
 /etc/x-ui
-
 
 
 echo "备份完成"
 
 
 fi
-
 
 
 }
@@ -503,33 +453,19 @@ echo "========== 状态检测 =========="
 
 
 
-if systemctl is-active --quiet x-ui
-
-then
-
-echo "✅ x-ui运行正常"
-
-else
-
+systemctl is-active --quiet x-ui && \
+echo "✅ x-ui运行正常" || \
 echo "❌ x-ui异常"
 
-fi
-
-
-
-echo
 
 
 if command -v xray >/dev/null 2>&1
 
 then
 
-echo "✅ Xray:"
+echo "✅ Xray版本:"
+
 xray version | head -2
-
-else
-
-echo "⚠️ Xray不存在"
 
 fi
 
@@ -537,8 +473,7 @@ fi
 
 echo
 
-
-echo "当前监听:"
+echo "监听端口:"
 
 ss -tlnp | grep LISTEN || true
 
@@ -546,11 +481,9 @@ ss -tlnp | grep LISTEN || true
 
 echo
 
-
-echo "BBR状态:"
+echo "BBR:"
 
 sysctl net.ipv4.tcp_congestion_control 2>/dev/null || true
-
 
 
 }
@@ -570,7 +503,7 @@ echo "
 
 =====================================================
 
-           liang 3x-ui Pro 安装完成
+          liang 3x-ui 安装完成
 
 
 面板地址:
@@ -590,9 +523,12 @@ $PASSWORD
 
 =====================================================
 
-Reality节点:
 
-进入3x-ui后台
+节点配置:
+
+进入后台
+
+入站列表
 
 创建:
 
@@ -647,6 +583,7 @@ show_info
 
 
 }
+
 
 
 main
