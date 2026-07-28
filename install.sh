@@ -1,124 +1,652 @@
 #!/bin/bash
-# 生产级 X-UI 安装+网络优化+面板修复脚本
-# 功能：
-# 1. 安装最新官方 X-UI（无交互）
-# 2. 自动配置用户名/密码/端口
-# 3. 启用 BBR v2 + TCP/MTU优化
-# 4. 检查服务和端口，自动修复面板 503
-# 5. 输出状态和日志
+
+# =====================================================
+# liang 3x-ui Pro v3.0
+# Multi OS VPS Installer
+# Based on MHSanaei/3x-ui
+# =====================================================
 
 set -e
 
-# ================== 配置参数 ==================
+export LANG=zh_CN.UTF-8
+
+
+# ================= 配置 =================
+
 USERNAME="liang"
-PASSWORD="liang"
+
+PASSWORD=$(openssl rand -hex 8 2>/dev/null || echo "liang123456")
+
 PORT="2026"
-SERVICE=x-ui
-# =============================================
 
-echo "========== 0. 等待 dpkg/apt 锁释放 =========="
-while fuser /var/lib/dpkg/lock >/dev/null 2>&1 || \
-      fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || \
-      fuser /var/lib/apt/lists/lock >/dev/null 2>&1; do
-    echo "检测到其他 apt/dpkg 进程运行，等待 3 秒..."
-    sleep 3
-done
+SERVICE="x-ui"
 
-echo "========== 1. 安装依赖 =========="
-apt update -y
-apt install -y curl wget tar sudo ethtool
+BACKUP_PATH="/root/x-ui-backup"
 
-echo "========== 2. 安装最新官方 X-UI =========="
-yes | bash <(curl -Ls https://raw.githubusercontent.com/vaxilu/x-ui/master/install.sh)
-sleep 6
 
-echo "========== 3. 配置面板账号/端口 =========="
-x-ui setting -username "$USERNAME"
-x-ui setting -password "$PASSWORD"
-x-ui setting -port "$PORT"
-x-ui setting -webBasePath /
 
-echo "========== 4. 启用 BBR v2 + 网络优化 =========="
-kernel_version=$(uname -r | cut -d'.' -f1-2)
-version_ge() { [ "$(printf '%s\n' "$2" "$1" | sort -V | head -n1)" = "$2" ]; }
+# ================= Logo =================
 
-if version_ge "$kernel_version" "4.9"; then
-    echo "启用 BBR v2"
-else
-    echo "⚠️ 内核版本 $kernel_version < 4.9，不支持 BBR v2"
+
+clear
+
+echo "
+=====================================================
+             liang 3x-ui Pro v3.0
+
+       Multi Linux + Reality Optimized
+
+=====================================================
+"
+
+
+
+# ================= 系统检测 =================
+
+
+detect_system(){
+
+echo "========== 检测系统 =========="
+
+
+if [ ! -f /etc/os-release ]; then
+
+echo "无法检测系统"
+
+exit 1
+
 fi
 
-cat > /etc/sysctl.d/99-optim-network.conf <<EOF
+
+source /etc/os-release
+
+
+OS=$ID
+
+
+case "$ID" in
+
+
+ubuntu|debian)
+
+PM="apt"
+
+;;
+
+
+centos|rhel|rocky|almalinux)
+
+PM="yum"
+
+;;
+
+
+fedora)
+
+PM="dnf"
+
+;;
+
+
+alpine)
+
+PM="apk"
+
+;;
+
+
+*)
+
+echo "不支持系统:$ID"
+
+exit 1
+
+;;
+
+esac
+
+
+
+ARCH=$(uname -m)
+
+
+
+echo "系统:"
+echo "$PRETTY_NAME"
+
+
+echo "架构:"
+echo "$ARCH"
+
+
+echo "包管理:"
+echo "$PM"
+
+
+}
+
+
+
+
+# ================= 安装依赖 =================
+
+
+install_dependencies(){
+
+
+echo
+
+echo "========== 安装依赖 =========="
+
+
+case "$PM" in
+
+
+apt)
+
+apt update -y
+
+apt install -y \
+curl \
+wget \
+tar \
+openssl \
+jq \
+socat \
+cron \
+ethtool \
+iproute2 \
+net-tools
+
+
+;;
+
+
+
+yum)
+
+yum install -y epel-release || true
+
+yum install -y \
+curl \
+wget \
+tar \
+openssl \
+jq \
+socat \
+cronie \
+ethtool \
+iproute \
+net-tools
+
+
+;;
+
+
+
+dnf)
+
+dnf install -y \
+curl \
+wget \
+tar \
+openssl \
+jq \
+socat \
+cronie \
+ethtool \
+iproute \
+net-tools
+
+
+;;
+
+
+
+apk)
+
+apk update
+
+apk add \
+curl \
+wget \
+tar \
+openssl \
+jq \
+socat \
+dcron \
+ethtool \
+iproute2
+
+
+;;
+
+
+esac
+
+
+}
+
+
+
+# ================= 安装3x-ui =================
+
+
+install_3xui(){
+
+
+echo
+
+echo "========== 安装 MHSanaei 3x-ui =========="
+
+
+
+bash <(curl -Ls https://raw.githubusercontent.com/MHSanaei/3x-ui/master/install.sh)
+
+
+
+sleep 5
+
+
+
+echo "========== 配置面板 =========="
+
+
+
+/usr/local/x-ui/x-ui setting \
+-username "$USERNAME" || true
+
+
+
+/usr/local/x-ui/x-ui setting \
+-password "$PASSWORD" || true
+
+
+
+/usr/local/x-ui/x-ui setting \
+-port "$PORT" || true
+
+
+
+/usr/local/x-ui/x-ui setting \
+-webBasePath "/" || true
+
+
+
+systemctl restart x-ui || true
+
+systemctl enable x-ui || true
+
+
+}
+
+
+
+# ================= BBR =================
+
+
+enable_bbr(){
+
+
+echo
+
+echo "========== BBR优化 =========="
+
+
+
+if modprobe tcp_bbr 2>/dev/null
+
+then
+
+
+cat >/etc/sysctl.d/99-liang-bbr.conf <<EOF
+
 net.core.default_qdisc=fq
+
 net.ipv4.tcp_congestion_control=bbr
-net.ipv4.tcp_ecn=1
-net.ipv4.tcp_fastopen=3
-net.ipv4.tcp_mtu_probing=1
-net.ipv4.tcp_tw_reuse=1
-net.ipv4.tcp_fin_timeout=15
-net.ipv4.tcp_keepalive_time=300
-net.ipv4.tcp_rmem=4096 87380 6291456
-net.ipv4.tcp_wmem=4096 65536 6291456
-net.core.rmem_max=16777216
-net.core.wmem_max=16777216
-net.core.netdev_max_backlog=250000
-net.core.somaxconn=65535
-fs.file-max=2097152
+
 EOF
 
+
 sysctl --system >/dev/null 2>&1
-echo "TCP 优化参数已生效"
 
-NIC=$(ip route | grep default | awk '{print $5}' | head -n1)
-if [ -n "$NIC" ]; then
-    echo "优化网卡 $NIC"
-    ip link set dev "$NIC" mtu 1500
-    ethtool -G "$NIC" rx 4096 tx 4096 || true
+
+echo "BBR 已开启"
+
+
 else
-    echo "⚠️ 未检测到默认网卡，请手动设置 MTU/队列"
+
+
+echo "当前内核不支持BBR"
+
+
 fi
 
-ulimit -n 1048576
-echo "文件描述符已优化"
 
-echo "========== 5. 检查 X-UI 服务状态并修复 503 =========="
-systemctl status $SERVICE --no-pager || echo "$SERVICE 服务未运行，尝试启动..."
-systemctl restart $SERVICE || echo "第一次启动未加载，稍后生效"
+}
+
+
+
+# ================= 网络优化 =================
+
+
+network_opt(){
+
 
 echo
-echo "========== 6. 检查端口占用 =========="
-if ss -tulnp | grep $PORT; then
-    echo "端口 $PORT 已被占用，请手动处理冲突"
+
+echo "========== 网络优化 =========="
+
+
+
+cat >/etc/sysctl.d/99-liang-network.conf <<EOF
+
+
+net.ipv4.tcp_fastopen=3
+
+net.ipv4.tcp_mtu_probing=1
+
+net.ipv4.tcp_tw_reuse=1
+
+net.ipv4.tcp_fin_timeout=15
+
+net.ipv4.tcp_keepalive_time=300
+
+
+net.core.rmem_max=16777216
+
+net.core.wmem_max=16777216
+
+net.core.netdev_max_backlog=250000
+
+net.core.somaxconn=65535
+
+
+fs.file-max=2097152
+
+
+EOF
+
+
+sysctl --system >/dev/null 2>&1 || true
+
+
+
+NIC=$(ip route | grep default | awk '{print $5}' | head -1)
+
+
+
+if [ -n "$NIC" ]
+
+then
+
+
+echo "优化网卡:$NIC"
+
+
+ip link set dev "$NIC" mtu 1500 || true
+
+
+ethtool -G "$NIC" rx 4096 tx 4096 2>/dev/null || true
+
+
+fi
+
+
+
+ulimit -n 1048576 || true
+
+
+
+}
+
+
+
+# ================= 防火墙 =================
+
+
+firewall(){
+
+
+echo
+
+echo "========== 防火墙 =========="
+
+
+
+if command -v ufw >/dev/null 2>&1
+
+then
+
+
+ufw allow $PORT/tcp || true
+
+ufw allow 443/tcp || true
+
+
+
+elif command -v firewall-cmd >/dev/null 2>&1
+
+then
+
+
+firewall-cmd --permanent --add-port=$PORT/tcp || true
+
+firewall-cmd --permanent --add-port=443/tcp || true
+
+firewall-cmd --reload || true
+
+
+
 else
-    echo "端口 $PORT 未被占用"
+
+
+iptables -I INPUT -p tcp --dport $PORT -j ACCEPT || true
+
+iptables -I INPUT -p tcp --dport 443 -j ACCEPT || true
+
+
 fi
 
+
+}
+
+
+
+# ================= 备份 =================
+
+
+backup(){
+
+
 echo
-echo "========== 7. 放行防火墙端口 =========="
-if command -v ufw &>/dev/null; then
-    sudo ufw allow $PORT/tcp
-    sudo ufw reload
-    echo "UFW 已放行 TCP $PORT"
+
+echo "========== 创建备份 =========="
+
+
+
+mkdir -p "$BACKUP_PATH"
+
+
+
+if [ -d /etc/x-ui ]
+
+then
+
+
+tar czf \
+"$BACKUP_PATH/x-ui-$(date +%F).tar.gz" \
+/etc/x-ui
+
+
+
+echo "备份完成"
+
+
 fi
 
-if command -v iptables &>/dev/null; then
-    sudo iptables -I INPUT -p tcp --dport $PORT -j ACCEPT
-    echo "iptables 已放行 TCP $PORT"
+
+
+}
+
+
+
+# ================= 检测 =================
+
+
+check_status(){
+
+
+echo
+
+echo "========== 状态检测 =========="
+
+
+
+if systemctl is-active --quiet x-ui
+
+then
+
+echo "✅ x-ui运行正常"
+
+else
+
+echo "❌ x-ui异常"
+
 fi
 
-echo
-echo "========== 8. 输出最近 50 条 X-UI 日志 =========="
-journalctl -u $SERVICE -n 50 --no-pager
 
-IP=$(curl -4s icanhazip.com || echo "服务器IP")
+
 echo
-echo "============== 安装/优化完成 =============="
-echo "访问地址: http://$IP:$PORT"
-echo "用户名: $USERNAME"
-echo "密码: $PASSWORD"
-echo "=========================================="
+
+
+if command -v xray >/dev/null 2>&1
+
+then
+
+echo "✅ Xray:"
+xray version | head -2
+
+else
+
+echo "⚠️ Xray不存在"
+
+fi
+
+
+
 echo
-echo "⚠️ 建议重启服务器以确保 BBR、MTU 和端口设置生效：sudo reboot"
-echo "查看 BBR 状态：sysctl net.ipv4.tcp_congestion_control"
-echo "查看网卡队列：ethtool -g $NIC"
-echo "查看文件描述符：ulimit -n"
+
+
+echo "当前监听:"
+
+ss -tlnp | grep LISTEN || true
+
+
+
+echo
+
+
+echo "BBR状态:"
+
+sysctl net.ipv4.tcp_congestion_control 2>/dev/null || true
+
+
+
+}
+
+
+
+# ================= 输出 =================
+
+
+show_info(){
+
+
+IP=$(curl -4 -s icanhazip.com || echo "服务器IP")
+
+
+echo "
+
+=====================================================
+
+           liang 3x-ui Pro 安装完成
+
+
+面板地址:
+
+http://$IP:$PORT
+
+
+用户名:
+
+$USERNAME
+
+
+密码:
+
+$PASSWORD
+
+
+=====================================================
+
+Reality节点:
+
+进入3x-ui后台
+
+创建:
+
+VLESS
++
+Reality
++
+Vision
+
+
+=====================================================
+
+"
+
+
+
+}
+
+
+
+# ================= 主流程 =================
+
+
+main(){
+
+
+detect_system
+
+
+install_dependencies
+
+
+install_3xui
+
+
+enable_bbr
+
+
+network_opt
+
+
+firewall
+
+
+backup
+
+
+check_status
+
+
+show_info
+
+
+}
+
+
+main
